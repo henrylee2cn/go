@@ -849,12 +849,6 @@ TEXT runtime·stackcheck(SB), NOSPLIT, $0-0
 	INT	$3
 	RET
 
-TEXT runtime·getcallerpc(SB),NOSPLIT,$4-8
-	MOVL	argp+0(FP),AX		// addr of first arg
-	MOVL	-4(AX),AX		// get calling pc
-	MOVL	AX, ret+4(FP)
-	RET
-
 // func cputicks() int64
 TEXT runtime·cputicks(SB),NOSPLIT,$0-8
 	CMPB	runtime·support_sse2(SB), $1
@@ -883,23 +877,6 @@ TEXT runtime·ldt0setup(SB),NOSPLIT,$16-0
 	RET
 
 TEXT runtime·emptyfunc(SB),0,$0-0
-	RET
-
-// memhash_varlen(p unsafe.Pointer, h seed) uintptr
-// redirects to memhash(p, h, size) using the size
-// stored in the closure.
-TEXT runtime·memhash_varlen(SB),NOSPLIT,$16-12
-	GO_ARGS
-	NO_LOCAL_POINTERS
-	MOVL	p+0(FP), AX
-	MOVL	h+4(FP), BX
-	MOVL	4(DX), CX
-	MOVL	AX, 0(SP)
-	MOVL	BX, 4(SP)
-	MOVL	CX, 8(SP)
-	CALL	runtime·memhash(SB)
-	MOVL	12(SP), AX
-	MOVL	AX, ret+8(FP)
 	RET
 
 // hash function using AES hardware instructions
@@ -1323,23 +1300,6 @@ eq:
 	MOVB    $1, ret+8(FP)
 	RET
 
-// eqstring tests whether two strings are equal.
-// The compiler guarantees that strings passed
-// to eqstring have equal length.
-// See runtime_test.go:eqstring_generic for
-// equivalent Go code.
-TEXT runtime·eqstring(SB),NOSPLIT,$0-17
-	MOVL	s1_base+0(FP), SI
-	MOVL	s2_base+8(FP), DI
-	CMPL	SI, DI
-	JEQ	same
-	MOVL	s1_len+4(FP), BX
-	LEAL	ret+16(FP), AX
-	JMP	runtime·memeqbody(SB)
-same:
-	MOVB	$1, ret+16(FP)
-	RET
-
 TEXT bytes·Equal(SB),NOSPLIT,$0-25
 	MOVL	a_len+4(FP), BX
 	MOVL	b_len+16(FP), CX
@@ -1636,19 +1596,6 @@ TEXT runtime·goexit(SB),NOSPLIT,$0-0
 	CALL	runtime·goexit1(SB)	// does not return
 	// traceback from goexit1 must hit code range of goexit
 	BYTE	$0x90	// NOP
-
-// Prefetching doesn't seem to help.
-TEXT runtime·prefetcht0(SB),NOSPLIT,$0-4
-	RET
-
-TEXT runtime·prefetcht1(SB),NOSPLIT,$0-4
-	RET
-
-TEXT runtime·prefetcht2(SB),NOSPLIT,$0-4
-	RET
-
-TEXT runtime·prefetchnta(SB),NOSPLIT,$0-4
-	RET
 
 // Add a module's moduledata to the linked list of moduledata objects. This
 // is called from .init_array by a function generated in the linker and so

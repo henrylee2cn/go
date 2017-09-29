@@ -44,6 +44,12 @@ func (mode *BuildMode) Set(s string) error {
 	case "pie":
 		switch objabi.GOOS {
 		case "android", "linux":
+		case "darwin":
+			switch objabi.GOARCH {
+			case "amd64":
+			default:
+				return badmode()
+			}
 		default:
 			return badmode()
 		}
@@ -63,7 +69,7 @@ func (mode *BuildMode) Set(s string) error {
 		*mode = BuildmodeCArchive
 	case "c-shared":
 		switch objabi.GOARCH {
-		case "386", "amd64", "arm", "arm64":
+		case "386", "amd64", "arm", "arm64", "ppc64le":
 		default:
 			return badmode()
 		}
@@ -84,7 +90,7 @@ func (mode *BuildMode) Set(s string) error {
 		switch objabi.GOOS {
 		case "linux":
 			switch objabi.GOARCH {
-			case "386", "amd64", "arm", "arm64", "s390x":
+			case "386", "amd64", "arm", "arm64", "s390x", "ppc64le":
 			default:
 				return badmode()
 			}
@@ -184,7 +190,8 @@ func mustLinkExternal(ctxt *Link) (res bool, reason string) {
 	// Internally linking cgo is incomplete on some architectures.
 	// https://golang.org/issue/10373
 	// https://golang.org/issue/14449
-	if iscgo && SysArch.InFamily(sys.ARM64, sys.MIPS64, sys.MIPS) {
+	// https://golang.org/issue/21961
+	if iscgo && SysArch.InFamily(sys.ARM64, sys.MIPS64, sys.MIPS, sys.PPC64) {
 		return true, objabi.GOARCH + " does not support internal cgo"
 	}
 

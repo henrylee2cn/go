@@ -704,31 +704,14 @@ TEXT setg_gcc<>(SB),NOSPLIT,$8
 	MOVD	savedR27-8(SP), R27
 	RET
 
-TEXT runtime·getcallerpc(SB),NOSPLIT,$8-16
-	MOVD	16(RSP), R0		// LR saved by caller
-	MOVD	R0, ret+8(FP)
+TEXT runtime·getcallerpc(SB),NOSPLIT,$-8-8
+	MOVD	0(RSP), R0		// LR saved by caller
+	MOVD	R0, ret+0(FP)
 	RET
 
 TEXT runtime·abort(SB),NOSPLIT,$-8-0
 	B	(ZR)
 	UNDEF
-
-// memhash_varlen(p unsafe.Pointer, h seed) uintptr
-// redirects to memhash(p, h, size) using the size
-// stored in the closure.
-TEXT runtime·memhash_varlen(SB),NOSPLIT,$40-24
-	GO_ARGS
-	NO_LOCAL_POINTERS
-	MOVD	p+0(FP), R3
-	MOVD	h+8(FP), R4
-	MOVD	8(R26), R5
-	MOVD	R3, 8(RSP)
-	MOVD	R4, 16(RSP)
-	MOVD	R5, 24(RSP)
-	BL	runtime·memhash(SB)
-	MOVD	32(RSP), R3
-	MOVD	R3, ret+16(FP)
-	RET
 
 // memequal(p, q unsafe.Pointer, size uintptr) bool
 TEXT runtime·memequal(SB),NOSPLIT,$-8-25
@@ -823,31 +806,6 @@ samebytes:
 	MOVD	R4, (R7)
 	RET
 
-// eqstring tests whether two strings are equal.
-// The compiler guarantees that strings passed
-// to eqstring have equal length.
-// See runtime_test.go:eqstring_generic for
-// equivalent Go code.
-TEXT runtime·eqstring(SB),NOSPLIT,$0-33
-	MOVD	s1_base+0(FP), R0
-	MOVD	s1_len+8(FP), R1
-	MOVD	s2_base+16(FP), R2
-	ADD	R0, R1		// end
-loop:
-	CMP	R0, R1
-	BEQ	equal		// reaches the end
-	MOVBU.P	1(R0), R4
-	MOVBU.P	1(R2), R5
-	CMP	R4, R5
-	BEQ	loop
-notequal:
-	MOVB	ZR, ret+32(FP)
-	RET
-equal:
-	MOVD	$1, R0
-	MOVB	R0, ret+32(FP)
-	RET
-
 //
 // functions for other packages
 //
@@ -930,19 +888,6 @@ TEXT runtime·return0(SB), NOSPLIT, $0
 TEXT runtime·goexit(SB),NOSPLIT,$-8-0
 	MOVD	R0, R0	// NOP
 	BL	runtime·goexit1(SB)	// does not return
-
-// TODO(aram): use PRFM here.
-TEXT runtime·prefetcht0(SB),NOSPLIT,$0-8
-	RET
-
-TEXT runtime·prefetcht1(SB),NOSPLIT,$0-8
-	RET
-
-TEXT runtime·prefetcht2(SB),NOSPLIT,$0-8
-	RET
-
-TEXT runtime·prefetchnta(SB),NOSPLIT,$0-8
-	RET
 
 TEXT runtime·sigreturn(SB),NOSPLIT,$0-0
 	RET

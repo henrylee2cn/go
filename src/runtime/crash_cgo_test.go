@@ -24,7 +24,10 @@ func TestCgoCrashHandler(t *testing.T) {
 }
 
 func TestCgoSignalDeadlock(t *testing.T) {
-	t.Parallel()
+	// Don't call t.Parallel, since too much work going on at the
+	// same time can cause the testprogcgo code to overrun its
+	// timeouts (issue #18598).
+
 	if testing.Short() && runtime.GOOS == "windows" {
 		t.Skip("Skipping in short mode") // takes up to 64 seconds
 	}
@@ -110,7 +113,7 @@ func TestCgoExternalThreadSIGPROF(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := testEnv(exec.Command(exe, "CgoExternalThreadSIGPROF")).CombinedOutput()
+	got, err := testenv.CleanCmdEnv(exec.Command(exe, "CgoExternalThreadSIGPROF")).CombinedOutput()
 	if err != nil {
 		t.Fatalf("exit status: %v\n%s", err, got)
 	}
@@ -133,7 +136,7 @@ func TestCgoExternalThreadSignal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := testEnv(exec.Command(exe, "CgoExternalThreadSIGPROF")).CombinedOutput()
+	got, err := testenv.CleanCmdEnv(exec.Command(exe, "CgoExternalThreadSIGPROF")).CombinedOutput()
 	if err != nil {
 		t.Fatalf("exit status: %v\n%s", err, got)
 	}
@@ -200,14 +203,14 @@ func TestCgoCheckBytes(t *testing.T) {
 	const tries = 10
 	var tot1, tot2 time.Duration
 	for i := 0; i < tries; i++ {
-		cmd := testEnv(exec.Command(exe, "CgoCheckBytes"))
+		cmd := testenv.CleanCmdEnv(exec.Command(exe, "CgoCheckBytes"))
 		cmd.Env = append(cmd.Env, "GODEBUG=cgocheck=0", fmt.Sprintf("GO_CGOCHECKBYTES_TRY=%d", i))
 
 		start := time.Now()
 		cmd.Run()
 		d1 := time.Since(start)
 
-		cmd = testEnv(exec.Command(exe, "CgoCheckBytes"))
+		cmd = testenv.CleanCmdEnv(exec.Command(exe, "CgoCheckBytes"))
 		cmd.Env = append(cmd.Env, fmt.Sprintf("GO_CGOCHECKBYTES_TRY=%d", i))
 
 		start = time.Now()
@@ -280,7 +283,7 @@ func testCgoPprof(t *testing.T, buildArg, runArg string) {
 		t.Fatal(err)
 	}
 
-	got, err := testEnv(exec.Command(exe, runArg)).CombinedOutput()
+	got, err := testenv.CleanCmdEnv(exec.Command(exe, runArg)).CombinedOutput()
 	if err != nil {
 		if testenv.Builder() == "linux-amd64-alpine" {
 			// See Issue 18243 and Issue 19938.
@@ -292,7 +295,7 @@ func testCgoPprof(t *testing.T, buildArg, runArg string) {
 	defer os.Remove(fn)
 
 	for try := 0; try < 2; try++ {
-		cmd := testEnv(exec.Command(testenv.GoToolPath(t), "tool", "pprof", "-top", "-nodecount=1"))
+		cmd := testenv.CleanCmdEnv(exec.Command(testenv.GoToolPath(t), "tool", "pprof", "-top", "-nodecount=1"))
 		// Check that pprof works both with and without explicit executable on command line.
 		if try == 0 {
 			cmd.Args = append(cmd.Args, exe, fn)
@@ -356,7 +359,7 @@ func TestRaceProf(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := testEnv(exec.Command(exe, "CgoRaceprof")).CombinedOutput()
+	got, err := testenv.CleanCmdEnv(exec.Command(exe, "CgoRaceprof")).CombinedOutput()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +388,7 @@ func TestRaceSignal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := testEnv(exec.Command(exe, "CgoRaceSignal")).CombinedOutput()
+	got, err := testenv.CleanCmdEnv(exec.Command(exe, "CgoRaceSignal")).CombinedOutput()
 	if err != nil {
 		t.Logf("%s\n", got)
 		t.Fatal(err)
@@ -406,5 +409,37 @@ func TestCgoNumGoroutine(t *testing.T) {
 	want := "OK\n"
 	if got != want {
 		t.Errorf("expected %q got %v", want, got)
+	}
+}
+
+func TestCatchPanic(t *testing.T) {
+	t.Parallel()
+	switch runtime.GOOS {
+	case "plan9", "windows":
+		t.Skipf("no signals on %s", runtime.GOOS)
+	case "darwin":
+		if runtime.GOARCH == "amd64" {
+			t.Skipf("crash() on darwin/amd64 doesn't raise SIGABRT")
+		}
+	}
+
+	testenv.MustHaveGoRun(t)
+
+	exe, err := buildTestProg(t, "testprogcgo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, early := range []bool{true, false} {
+		cmd := testenv.CleanCmdEnv(exec.Command(exe, "CgoCatchPanic"))
+		// Make sure a panic results in a crash.
+		cmd.Env = append(cmd.Env, "GOTRACEBACK=crash")
+		if early {
+			// Tell testprogcgo to install an early signal handler for SIGABRT
+			cmd.Env = append(cmd.Env, "CGOCATCHPANIC_EARLY_HANDLER=1")
+		}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("testprogcgo CgoCatchPanic failed: %v\n%s", err, out)
+		}
 	}
 }

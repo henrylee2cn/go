@@ -36,6 +36,7 @@ type nameSpace struct {
 	mu      sync.Mutex
 	set     map[string]*Template
 	escaped bool
+	esc     escaper
 }
 
 // Templates returns a slice of the templates associated with t, including t
@@ -218,6 +219,11 @@ func (t *Template) AddParseTree(name string, tree *parse.Tree) (*Template, error
 
 	t.nameSpace.mu.Lock()
 	defer t.nameSpace.mu.Unlock()
+	for _, tmpl := range t.set {
+		if tmpl.Tree == tree {
+			return nil, fmt.Errorf("html/template: cannot add parse tree that template %q already references", tmpl.Name())
+		}
+	}
 	text, err := t.text.AddParseTree(name, tree)
 	if err != nil {
 		return nil, err
@@ -250,13 +256,13 @@ func (t *Template) Clone() (*Template, error) {
 	if err != nil {
 		return nil, err
 	}
+	ns := &nameSpace{set: make(map[string]*Template)}
+	ns.esc = makeEscaper(ns)
 	ret := &Template{
 		nil,
 		textClone,
 		textClone.Tree,
-		&nameSpace{
-			set: make(map[string]*Template),
-		},
+		ns,
 	}
 	ret.set[ret.Name()] = ret
 	for _, x := range textClone.Templates() {
@@ -279,13 +285,13 @@ func (t *Template) Clone() (*Template, error) {
 
 // New allocates a new HTML template with the given name.
 func New(name string) *Template {
+	ns := &nameSpace{set: make(map[string]*Template)}
+	ns.esc = makeEscaper(ns)
 	tmpl := &Template{
 		nil,
 		template.New(name),
 		nil,
-		&nameSpace{
-			set: make(map[string]*Template),
-		},
+		ns,
 	}
 	tmpl.set[name] = tmpl
 	return tmpl

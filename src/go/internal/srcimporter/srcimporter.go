@@ -128,16 +128,33 @@ func (p *Importer) ImportFrom(path, srcDir string, mode types.ImportMode) (*type
 	}
 
 	// type-check package files
+	var firstHardErr error
 	conf := types.Config{
 		IgnoreFuncBodies: true,
 		FakeImportC:      true,
-		Importer:         p,
-		Sizes:            p.sizes,
+		// continue type-checking after the first error
+		Error: func(err error) {
+			if firstHardErr == nil && !err.(types.Error).Soft {
+				firstHardErr = err
+			}
+		},
+		Importer: p,
+		Sizes:    p.sizes,
 	}
 	pkg, err = conf.Check(bp.ImportPath, p.fset, files, nil)
 	if err != nil {
-		// return (possibly nil or incomplete) package with error (see #16088)
+		// If there was a hard error it is possibly unsafe
+		// to use the package as it may not be fully populated.
+		// Do not return it (see also #20837, #20855).
+		if firstHardErr != nil {
+			pkg = nil
+			err = firstHardErr // give preference to first hard error over any soft error
+		}
 		return pkg, fmt.Errorf("type-checking package %q failed (%v)", bp.ImportPath, err)
+	}
+	if firstHardErr != nil {
+		// this can only happen if we have a bug in go/types
+		panic("package is not safe yet no error was returned")
 	}
 
 	p.packages[bp.ImportPath] = pkg

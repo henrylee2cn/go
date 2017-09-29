@@ -23,10 +23,10 @@
 // approximately 20 milliseconds, even if the wall clock is changed during
 // the operation being timed:
 //
-//	t := time.Now()
+//	start := time.Now()
 //	... operation that takes 20 milliseconds ...
-//	u := time.Now()
-//	elapsed := t.Sub(u)
+//	t := time.Now()
+//	elapsed := t.Sub(start)
 //
 // Other idioms, such as time.Since(start), time.Until(deadline), and
 // time.Now().Before(deadline), are similarly robust against wall clock
@@ -370,7 +370,7 @@ func (d Weekday) String() string { return days[d] }
 // everywhere.
 //
 // The calendar runs on an exact 400 year cycle: a 400-year calendar
-// printed for 1970-2469 will apply as well to 2370-2769. Even the days
+// printed for 1970-2369 will apply as well to 2370-2769. Even the days
 // of the week match up. It simplifies the computations to choose the
 // cycle boundaries so that the exceptional years are always delayed as
 // long as possible. That means choosing a year equal to 1 mod 400, so
@@ -1383,7 +1383,7 @@ func Date(year int, month Month, day, hour, min, sec, nsec int, loc *Location) T
 }
 
 // Truncate returns the result of rounding t down to a multiple of d (since the zero time).
-// If d <= 0, Truncate returns t unchanged.
+// If d <= 0, Truncate returns t stripped of any monotonic clock reading but otherwise unchanged.
 //
 // Truncate operates on the time as an absolute duration since the
 // zero time; it does not operate on the presentation form of the
@@ -1400,7 +1400,7 @@ func (t Time) Truncate(d Duration) Time {
 
 // Round returns the result of rounding t to the nearest multiple of d (since the zero time).
 // The rounding behavior for halfway values is to round up.
-// If d <= 0, Round returns t unchanged.
+// If d <= 0, Round returns t stripped of any monotonic clock reading but otherwise unchanged.
 //
 // Round operates on the time as an absolute duration since the
 // zero time; it does not operate on the presentation form of the

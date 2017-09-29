@@ -782,7 +782,7 @@
 // The -n flag causes tool to print the command that would be
 // executed but not execute it.
 //
-// For more about each tool command, see 'go tool command -h'.
+// For more about each tool command, see 'go doc cmd/<command>'.
 //
 //
 // Print Go version
@@ -808,7 +808,9 @@
 // The -n flag prints commands that would be executed.
 // The -x flag prints commands as they are executed.
 //
-// For more about build flags, see 'go help build'.
+// The build flags supported by go vet are those that control package resolution
+// and execution, such as -n, -x, -v, -tags, and -toolexec.
+// For more about these flags, see 'go help build'.
 //
 // See also: go fmt, go fix.
 //
@@ -849,10 +851,10 @@
 // 		exactly one main package to be listed.
 //
 // 	-buildmode=c-shared
-// 		Build the listed main packages, plus all packages that they
-// 		import, into C shared libraries. The only callable symbols will
+// 		Build the listed main package, plus all packages it imports,
+// 		into a C shared library. The only callable symbols will
 // 		be those functions exported using a cgo //export comment.
-// 		Non-main packages are ignored.
+// 		Requires exactly one main package to be listed.
 //
 // 	-buildmode=default
 // 		Listed main packages are built into executables and listed
@@ -917,8 +919,10 @@
 // comment, indicating that the package sources are included
 // for documentation only and must not be used to build the
 // package binary. This enables distribution of Go packages in
-// their compiled form alone. See the go/build package documentation
-// for more details.
+// their compiled form alone. Even binary-only packages require
+// accurate import blocks listing required dependencies, so that
+// those dependencies can be supplied when linking the resulting
+// command.
 //
 //
 // GOPATH environment variable
@@ -1499,8 +1503,7 @@
 // 	    exhaustive tests.
 //
 // 	-timeout d
-// 	    If the cumulative test time for a package runs longer than
-// 	    duration d, panic. Timeout is disabled if set to 0.
+// 	    If a test binary runs longer than duration d, panic.
 // 	    The default is 10 minutes (10m).
 //
 // 	-v

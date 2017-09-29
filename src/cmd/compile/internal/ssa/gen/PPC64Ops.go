@@ -128,8 +128,9 @@ func init() {
 		// cr  = buildReg("CR")
 		// ctr = buildReg("CTR")
 		// lr  = buildReg("LR")
-		tmp  = buildReg("R31")
-		ctxt = buildReg("R11")
+		tmp     = buildReg("R31")
+		ctxt    = buildReg("R11")
+		callptr = buildReg("R12")
 		// tls = buildReg("R13")
 		gp01        = regInfo{inputs: nil, outputs: []regMask{gp}}
 		gp11        = regInfo{inputs: []regMask{gp | sp | sb}, outputs: []regMask{gp}}
@@ -185,6 +186,9 @@ func init() {
 		{name: "SLD", argLength: 2, reg: gp21, asm: "SLD"},   // arg0 << arg1, 64 bits  (0 if arg1 & 64 != 0)
 		{name: "SLW", argLength: 2, reg: gp21, asm: "SLW"},   // arg0 << arg1, 32 bits  (0 if arg1 & 32 != 0)
 
+		{name: "ROTL", argLength: 2, reg: gp21, asm: "ROTL"},   // arg0 rotate left by arg1 mod 64
+		{name: "ROTLW", argLength: 2, reg: gp21, asm: "ROTLW"}, // uint32(arg0) rotate left by arg1 mod 32
+
 		{name: "ADDconstForCarry", argLength: 1, reg: regInfo{inputs: []regMask{gp | sp | sb}, clobbers: tmp}, aux: "Int16", asm: "ADDC", typ: "Flags"}, // _, carry := arg0 + aux
 		{name: "MaskIfNotCarry", argLength: 1, reg: crgp, asm: "ADDME", typ: "Int64"},                                                                   // carry - 1 (if carry then 0 else -1)
 
@@ -219,6 +223,7 @@ func init() {
 		{name: "FCTIDZ", argLength: 1, reg: fp11, asm: "FCTIDZ", typ: "Float64"}, // convert float to 64-bit int round towards zero
 		{name: "FCTIWZ", argLength: 1, reg: fp11, asm: "FCTIWZ", typ: "Float64"}, // convert float to 32-bit int round towards zero
 		{name: "FCFID", argLength: 1, reg: fp11, asm: "FCFID", typ: "Float64"},   // convert 64-bit integer to float
+		{name: "FCFIDS", argLength: 1, reg: fp11, asm: "FCFIDS", typ: "Float32"}, // convert 32-bit integer to float
 		{name: "FRSP", argLength: 1, reg: fp11, asm: "FRSP", typ: "Float64"},     // round float to 32-bit value
 
 		// Movement between float and integer registers with no change in bits; accomplished with stores+loads on PPC.
@@ -227,8 +232,8 @@ func init() {
 		// There are optimizations that should apply -- (Xi2f64 (MOVWload (not-ADD-ptr+offset) ) ) could use
 		// the word-load instructions.  (Xi2f64 (MOVDload ptr )) can be (FMOVDload ptr)
 
-		{name: "Xf2i64", argLength: 1, reg: fpgp, typ: "Int64"},   // move 64 bits of F register into G register
-		{name: "Xi2f64", argLength: 1, reg: gpfp, typ: "Float64"}, // move 64 bits of G register into F register
+		{name: "MFVSRD", argLength: 1, reg: fpgp, asm: "MFVSRD", typ: "Int64"},   // move 64 bits of F register into G register
+		{name: "MTVSRD", argLength: 1, reg: gpfp, asm: "MTVSRD", typ: "Float64"}, // move 64 bits of G register into F register
 
 		{name: "AND", argLength: 2, reg: gp21, asm: "AND", commutative: true},               // arg0&arg1
 		{name: "ANDN", argLength: 2, reg: gp21, asm: "ANDN"},                                // arg0&^arg1
@@ -241,6 +246,9 @@ func init() {
 		{name: "FNEG", argLength: 1, reg: fp11, asm: "FNEG"},                                // -arg0 (floating point)
 		{name: "FSQRT", argLength: 1, reg: fp11, asm: "FSQRT"},                              // sqrt(arg0) (floating point)
 		{name: "FSQRTS", argLength: 1, reg: fp11, asm: "FSQRTS"},                            // sqrt(arg0) (floating point, single precision)
+		{name: "FFLOOR", argLength: 1, reg: fp11, asm: "FRIM"},                              // floor(arg0), float64
+		{name: "FCEIL", argLength: 1, reg: fp11, asm: "FRIP"},                               // ceil(arg0), float64
+		{name: "FTRUNC", argLength: 1, reg: fp11, asm: "FRIZ"},                              // trunc(arg0), float64
 
 		{name: "ORconst", argLength: 1, reg: gp11, asm: "OR", aux: "Int64"},                                                                                     // arg0|aux
 		{name: "XORconst", argLength: 1, reg: gp11, asm: "XOR", aux: "Int64"},                                                                                   // arg0^aux
@@ -317,8 +325,8 @@ func init() {
 		{name: "MOVDconvert", argLength: 2, reg: gp11, asm: "MOVD"},
 
 		{name: "CALLstatic", argLength: 1, reg: regInfo{clobbers: callerSave}, aux: "SymOff", clobberFlags: true, call: true, symEffect: "None"},                   // call static function aux.(*obj.LSym).  arg0=mem, auxint=argsize, returns mem
-		{name: "CALLclosure", argLength: 3, reg: regInfo{inputs: []regMask{gp | sp, ctxt, 0}, clobbers: callerSave}, aux: "Int64", clobberFlags: true, call: true}, // call function via closure.  arg0=codeptr, arg1=closure, arg2=mem, auxint=argsize, returns mem
-		{name: "CALLinter", argLength: 2, reg: regInfo{inputs: []regMask{gp}, clobbers: callerSave}, aux: "Int64", clobberFlags: true, call: true},                 // call fn by pointer.  arg0=codeptr, arg1=mem, auxint=argsize, returns mem
+		{name: "CALLclosure", argLength: 3, reg: regInfo{inputs: []regMask{callptr, ctxt, 0}, clobbers: callerSave}, aux: "Int64", clobberFlags: true, call: true}, // call function via closure.  arg0=codeptr, arg1=closure, arg2=mem, auxint=argsize, returns mem
+		{name: "CALLinter", argLength: 2, reg: regInfo{inputs: []regMask{callptr}, clobbers: callerSave}, aux: "Int64", clobberFlags: true, call: true},            // call fn by pointer.  arg0=codeptr, arg1=mem, auxint=argsize, returns mem
 
 		// large or unaligned zeroing
 		// arg0 = address of memory to zero (in R3, changed as side effect)

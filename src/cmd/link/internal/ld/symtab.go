@@ -223,7 +223,7 @@ func putplan9sym(ctxt *Link, x *Symbol, s string, typ SymbolType, addr int64, go
 		}
 		fallthrough
 
-	case AutoSym, ParamSym, FileSym, FrameSym:
+	case AutoSym, ParamSym, FrameSym:
 		l := 4
 		if Headtype == objabi.Hplan9 && SysArch.Family == sys.AMD64 && !Flag8 {
 			Lputb(uint32(addr >> 32))
@@ -233,18 +233,10 @@ func putplan9sym(ctxt *Link, x *Symbol, s string, typ SymbolType, addr int64, go
 		Lputb(uint32(addr))
 		Cput(uint8(t + 0x80)) /* 0x80 is variable length */
 
-		var i int
-
-		/* skip the '<' in filenames */
-		if t == FileSym {
-			s = s[1:]
-		}
-		for i = 0; i < len(s); i++ {
-			Cput(s[i])
-		}
+		Cwritestring(s)
 		Cput(0)
 
-		Symsize += int32(l) + 1 + int32(i) + 1
+		Symsize += int32(l) + 1 + int32(len(s)) + 1
 
 	default:
 		return

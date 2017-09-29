@@ -1120,9 +1120,7 @@ func getElfEhdr() *ElfEhdr {
 }
 
 func elf64writehdr() uint32 {
-	for i := 0; i < EI_NIDENT; i++ {
-		Cput(ehdr.ident[i])
-	}
+	Cwrite(ehdr.ident[:])
 	Thearch.Wput(ehdr.type_)
 	Thearch.Wput(ehdr.machine)
 	Thearch.Lput(ehdr.version)
@@ -1140,9 +1138,7 @@ func elf64writehdr() uint32 {
 }
 
 func elf32writehdr() uint32 {
-	for i := 0; i < EI_NIDENT; i++ {
-		Cput(ehdr.ident[i])
-	}
+	Cwrite(ehdr.ident[:])
 	Thearch.Wput(ehdr.type_)
 	Thearch.Wput(ehdr.machine)
 	Thearch.Lput(ehdr.version)
@@ -1804,21 +1800,21 @@ func elfrelocsect(ctxt *Link, sect *Section, syms []*Symbol) {
 		}
 		for ri := 0; ri < len(sym.R); ri++ {
 			r := &sym.R[ri]
-			if r.Done != 0 {
+			if r.Done {
 				continue
 			}
 			if r.Xsym == nil {
-				Errorf(sym, "missing xsym in relocation")
+				Errorf(sym, "missing xsym in relocation %#v %#v", r.Sym.Name, sym)
 				continue
 			}
 			if r.Xsym.ElfsymForReloc() == 0 {
-				Errorf(sym, "reloc %d to non-elf symbol %s (outer=%s) %d", r.Type, r.Sym.Name, r.Xsym.Name, r.Sym.Type)
+				Errorf(sym, "reloc %d (%s) to non-elf symbol %s (outer=%s) %d (%s)", r.Type, RelocName(r.Type), r.Sym.Name, r.Xsym.Name, r.Sym.Type, r.Sym.Type)
 			}
 			if !r.Xsym.Attr.Reachable() {
-				Errorf(sym, "unreachable reloc %v target %v", r.Type, r.Xsym.Name)
+				Errorf(sym, "unreachable reloc %d (%s) target %v", r.Type, RelocName(r.Type), r.Xsym.Name)
 			}
-			if Thearch.Elfreloc1(ctxt, r, int64(uint64(sym.Value+int64(r.Off))-sect.Vaddr)) < 0 {
-				Errorf(sym, "unsupported obj reloc %d/%d to %s", r.Type, r.Siz, r.Sym.Name)
+			if !Thearch.Elfreloc1(ctxt, r, int64(uint64(sym.Value+int64(r.Off))-sect.Vaddr)) {
+				Errorf(sym, "unsupported obj reloc %d (%s)/%d to %s", r.Type, RelocName(r.Type), r.Siz, r.Sym.Name)
 			}
 		}
 	}
@@ -1874,6 +1870,7 @@ func addgonote(ctxt *Link, sectionName string, tag uint32, desc []byte) {
 		s.P = append(s.P, 0)
 	}
 	s.Size = int64(len(s.P))
+	s.Align = 4
 }
 
 func (ctxt *Link) doelf() {
@@ -2596,11 +2593,8 @@ elfobj:
 			elfshreloc(sect)
 		}
 		for _, s := range dwarfp {
-			if len(s.R) > 0 || s.Type == SDWARFINFO {
+			if len(s.R) > 0 || s.Type == SDWARFINFO || s.Type == SDWARFLOC {
 				elfshreloc(s.Sect)
-			}
-			if s.Type == SDWARFINFO {
-				break
 			}
 		}
 		// add a .note.GNU-stack section to mark the stack as non-executable
@@ -2702,7 +2696,7 @@ elfobj:
 	}
 }
 
-func Elfadddynsym(ctxt *Link, s *Symbol) {
+func elfadddynsym(ctxt *Link, s *Symbol) {
 	if elf64 {
 		s.Dynid = int32(Nelfsym)
 		Nelfsym++

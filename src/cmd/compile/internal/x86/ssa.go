@@ -604,7 +604,11 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.To.Sym = gc.Duffcopy
 		p.To.Offset = v.AuxInt
 
-	case ssa.OpCopy, ssa.Op386MOVLconvert: // TODO: use MOVLreg for reg->reg copies instead of OpCopy?
+	case ssa.Op386MOVLconvert:
+		if v.Args[0].Reg() != v.Reg() {
+			v.Fatalf("MOVLconvert should be a no-op")
+		}
+	case ssa.OpCopy: // TODO: use MOVLreg for reg->reg copies instead of OpCopy?
 		if v.Type.IsMemory() {
 			return
 		}
@@ -662,6 +666,15 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 			q.To.Type = obj.TYPE_REG
 			q.To.Reg = r
 		}
+
+	case ssa.Op386LoweredGetCallerPC:
+		p := s.Prog(x86.AMOVL)
+		p.From.Type = obj.TYPE_MEM
+		p.From.Offset = -4 // PC is stored 4 bytes below first parameter.
+		p.From.Name = obj.NAME_PARAM
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = v.Reg()
+
 	case ssa.Op386CALLstatic, ssa.Op386CALLclosure, ssa.Op386CALLinter:
 		s.Call(v)
 	case ssa.Op386NEGL,
@@ -724,7 +737,7 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 	case ssa.Op386LoweredNilCheck:
 		// Issue a load which will fault if the input is nil.
 		// TODO: We currently use the 2-byte instruction TESTB AX, (reg).
-		// Should we use the 3-byte TESTB $0, (reg) instead?  It is larger
+		// Should we use the 3-byte TESTB $0, (reg) instead? It is larger
 		// but it doesn't have false dependency on AX.
 		// Or maybe allocate an output register and use MOVL (reg),reg2 ?
 		// That trades clobbering flags for clobbering a register.

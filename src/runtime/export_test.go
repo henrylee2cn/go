@@ -152,12 +152,19 @@ func RunSchedLocalQueueEmptyTest(iters int) {
 	}
 }
 
-var StringHash = stringHash
-var BytesHash = bytesHash
-var Int32Hash = int32Hash
-var Int64Hash = int64Hash
-var EfaceHash = efaceHash
-var IfaceHash = ifaceHash
+var (
+	StringHash = stringHash
+	BytesHash  = bytesHash
+	Int32Hash  = int32Hash
+	Int64Hash  = int64Hash
+	MemHash    = memhash
+	MemHash32  = memhash32
+	MemHash64  = memhash64
+	EfaceHash  = efaceHash
+	IfaceHash  = ifaceHash
+)
+
+var UseAeshash = &useAeshash
 
 func MemclrBytes(b []byte) {
 	s := (*slice)(unsafe.Pointer(&b))
@@ -354,10 +361,6 @@ type RWMutex struct {
 	rw rwmutex
 }
 
-func (rw *RWMutex) Init() {
-	rw.rw.init()
-}
-
 func (rw *RWMutex) RLock() {
 	rw.rw.rlock()
 }
@@ -372,4 +375,9 @@ func (rw *RWMutex) Lock() {
 
 func (rw *RWMutex) Unlock() {
 	rw.rw.unlock()
+}
+
+func MapBuckets(m map[int]int) int {
+	h := *(**hmap)(unsafe.Pointer(&m))
+	return 1 << h.B
 }

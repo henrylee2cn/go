@@ -329,6 +329,8 @@ func rewriteValue386(v *Value) bool {
 		return rewriteValue386_OpGeq8_0(v)
 	case OpGeq8U:
 		return rewriteValue386_OpGeq8U_0(v)
+	case OpGetCallerPC:
+		return rewriteValue386_OpGetCallerPC_0(v)
 	case OpGetClosurePtr:
 		return rewriteValue386_OpGetClosurePtr_0(v)
 	case OpGetG:
@@ -15052,6 +15054,15 @@ func rewriteValue386_OpGeq8U_0(v *Value) bool {
 		return true
 	}
 }
+func rewriteValue386_OpGetCallerPC_0(v *Value) bool {
+	// match: (GetCallerPC)
+	// cond:
+	// result: (LoweredGetCallerPC)
+	for {
+		v.reset(Op386LoweredGetCallerPC)
+		return true
+	}
+}
 func rewriteValue386_OpGetClosurePtr_0(v *Value) bool {
 	// match: (GetClosurePtr)
 	// cond:
@@ -18325,6 +18336,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386EQ
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (EQ (FlagEQ) yes no)
@@ -18337,6 +18349,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (EQ (FlagLT_ULT) yes no)
@@ -18349,6 +18362,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -18362,6 +18376,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -18375,6 +18390,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -18388,6 +18404,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -18403,6 +18420,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386LE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (GE (FlagEQ) yes no)
@@ -18415,6 +18433,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (GE (FlagLT_ULT) yes no)
@@ -18427,6 +18446,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -18440,6 +18460,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -18453,6 +18474,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (GE (FlagGT_UGT) yes no)
@@ -18465,6 +18487,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 	case Block386GT:
@@ -18479,6 +18502,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386LT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (GT (FlagEQ) yes no)
@@ -18491,6 +18515,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -18504,6 +18529,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -18517,6 +18543,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -18530,6 +18557,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (GT (FlagGT_UGT) yes no)
@@ -18542,6 +18570,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 	case BlockIf:
@@ -18556,6 +18585,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386LT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (If (SETLE cmp) yes no)
@@ -18569,6 +18599,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386LE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (If (SETG cmp) yes no)
@@ -18582,6 +18613,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386GT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (If (SETGE cmp) yes no)
@@ -18595,6 +18627,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386GE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (If (SETEQ cmp) yes no)
@@ -18608,6 +18641,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386EQ
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (If (SETNE cmp) yes no)
@@ -18621,6 +18655,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386NE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (If (SETB cmp) yes no)
@@ -18634,6 +18669,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386ULT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (If (SETBE cmp) yes no)
@@ -18647,6 +18683,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386ULE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (If (SETA cmp) yes no)
@@ -18660,6 +18697,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386UGT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (If (SETAE cmp) yes no)
@@ -18673,6 +18711,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386UGE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (If (SETGF cmp) yes no)
@@ -18686,6 +18725,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386UGT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (If (SETGEF cmp) yes no)
@@ -18699,6 +18739,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386UGE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (If (SETEQF cmp) yes no)
@@ -18712,6 +18753,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386EQF
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (If (SETNEF cmp) yes no)
@@ -18725,6 +18767,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386NEF
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (If cond yes no)
@@ -18739,6 +18782,7 @@ func rewriteBlock386(b *Block) bool {
 			v0.AddArg(cond)
 			v0.AddArg(cond)
 			b.SetControl(v0)
+			b.Aux = nil
 			return true
 		}
 	case Block386LE:
@@ -18753,6 +18797,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386GE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (LE (FlagEQ) yes no)
@@ -18765,6 +18810,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (LE (FlagLT_ULT) yes no)
@@ -18777,6 +18823,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (LE (FlagLT_UGT) yes no)
@@ -18789,6 +18836,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (LE (FlagGT_ULT) yes no)
@@ -18801,6 +18849,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -18814,6 +18863,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -18829,6 +18879,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386GT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (LT (FlagEQ) yes no)
@@ -18841,6 +18892,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -18854,6 +18906,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (LT (FlagLT_UGT) yes no)
@@ -18866,6 +18919,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (LT (FlagGT_ULT) yes no)
@@ -18878,6 +18932,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -18891,6 +18946,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -18918,6 +18974,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386LT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETL cmp) (SETL cmp)) yes no)
@@ -18943,6 +19000,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386LT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETLE cmp) (SETLE cmp)) yes no)
@@ -18968,6 +19026,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386LE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETLE cmp) (SETLE cmp)) yes no)
@@ -18993,6 +19052,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386LE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETG cmp) (SETG cmp)) yes no)
@@ -19018,6 +19078,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386GT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETG cmp) (SETG cmp)) yes no)
@@ -19043,6 +19104,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386GT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETGE cmp) (SETGE cmp)) yes no)
@@ -19068,6 +19130,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386GE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETGE cmp) (SETGE cmp)) yes no)
@@ -19093,6 +19156,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386GE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETEQ cmp) (SETEQ cmp)) yes no)
@@ -19118,6 +19182,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386EQ
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETEQ cmp) (SETEQ cmp)) yes no)
@@ -19143,6 +19208,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386EQ
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETNE cmp) (SETNE cmp)) yes no)
@@ -19168,6 +19234,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386NE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETNE cmp) (SETNE cmp)) yes no)
@@ -19193,6 +19260,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386NE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETB cmp) (SETB cmp)) yes no)
@@ -19218,6 +19286,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386ULT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETB cmp) (SETB cmp)) yes no)
@@ -19243,6 +19312,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386ULT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETBE cmp) (SETBE cmp)) yes no)
@@ -19268,6 +19338,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386ULE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETBE cmp) (SETBE cmp)) yes no)
@@ -19293,6 +19364,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386ULE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETA cmp) (SETA cmp)) yes no)
@@ -19318,6 +19390,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386UGT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETA cmp) (SETA cmp)) yes no)
@@ -19343,6 +19416,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386UGT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETAE cmp) (SETAE cmp)) yes no)
@@ -19368,6 +19442,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386UGE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETAE cmp) (SETAE cmp)) yes no)
@@ -19393,6 +19468,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386UGE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETGF cmp) (SETGF cmp)) yes no)
@@ -19418,6 +19494,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386UGT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETGF cmp) (SETGF cmp)) yes no)
@@ -19443,6 +19520,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386UGT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETGEF cmp) (SETGEF cmp)) yes no)
@@ -19468,6 +19546,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386UGE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETGEF cmp) (SETGEF cmp)) yes no)
@@ -19493,6 +19572,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386UGE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETEQF cmp) (SETEQF cmp)) yes no)
@@ -19518,6 +19598,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386EQF
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETEQF cmp) (SETEQF cmp)) yes no)
@@ -19543,6 +19624,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386EQF
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETNEF cmp) (SETNEF cmp)) yes no)
@@ -19568,6 +19650,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386NEF
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (TESTB (SETNEF cmp) (SETNEF cmp)) yes no)
@@ -19593,6 +19676,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = Block386NEF
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (InvertFlags cmp) yes no)
@@ -19606,6 +19690,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386NE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (FlagEQ) yes no)
@@ -19618,6 +19703,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -19631,6 +19717,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (FlagLT_UGT) yes no)
@@ -19643,6 +19730,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (FlagGT_ULT) yes no)
@@ -19655,6 +19743,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (NE (FlagGT_UGT) yes no)
@@ -19667,6 +19756,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 	case Block386UGE:
@@ -19681,6 +19771,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386ULE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (UGE (FlagEQ) yes no)
@@ -19693,6 +19784,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (UGE (FlagLT_ULT) yes no)
@@ -19705,6 +19797,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -19718,6 +19811,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (UGE (FlagGT_ULT) yes no)
@@ -19730,6 +19824,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -19743,6 +19838,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 	case Block386UGT:
@@ -19757,6 +19853,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386ULT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (UGT (FlagEQ) yes no)
@@ -19769,6 +19866,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -19782,6 +19880,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -19795,6 +19894,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (UGT (FlagGT_ULT) yes no)
@@ -19807,6 +19907,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -19820,6 +19921,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 	case Block386ULE:
@@ -19834,6 +19936,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386UGE
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (ULE (FlagEQ) yes no)
@@ -19846,6 +19949,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (ULE (FlagLT_ULT) yes no)
@@ -19858,6 +19962,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (ULE (FlagLT_UGT) yes no)
@@ -19870,6 +19975,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -19883,6 +19989,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (ULE (FlagGT_UGT) yes no)
@@ -19895,6 +20002,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -19910,6 +20018,7 @@ func rewriteBlock386(b *Block) bool {
 			cmp := v.Args[0]
 			b.Kind = Block386UGT
 			b.SetControl(cmp)
+			b.Aux = nil
 			return true
 		}
 		// match: (ULT (FlagEQ) yes no)
@@ -19922,6 +20031,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -19935,6 +20045,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (ULT (FlagLT_UGT) yes no)
@@ -19947,6 +20058,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}
@@ -19960,6 +20072,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			return true
 		}
 		// match: (ULT (FlagGT_UGT) yes no)
@@ -19972,6 +20085,7 @@ func rewriteBlock386(b *Block) bool {
 			}
 			b.Kind = BlockFirst
 			b.SetControl(nil)
+			b.Aux = nil
 			b.swapSuccessors()
 			return true
 		}

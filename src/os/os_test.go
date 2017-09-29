@@ -1014,9 +1014,14 @@ func TestStartProcess(t *testing.T) {
 		dir = Getenv("SystemRoot")
 		args = []string{"/c", "cd"}
 	default:
-		cmd = "/bin/pwd"
+		var err error
+		cmd, err = osexec.LookPath("pwd")
+		if err != nil {
+			t.Fatalf("Can't find pwd: %v", err)
+		}
 		dir = "/"
 		args = []string{}
+		t.Logf("Testing with %v", cmd)
 	}
 	cmddir, cmdbase := filepath.Split(cmd)
 	args = append([]string{cmdbase}, args...)
@@ -1518,7 +1523,7 @@ func TestHostname(t *testing.T) {
 	}
 	want := runBinHostname(t)
 	if hostname != want {
-		i := strings.Index(hostname, ".")
+		i := strings.IndexByte(hostname, '.')
 		if i < 0 || hostname[0:i] != want {
 			t.Errorf("Hostname() = %q, want %q", hostname, want)
 		}
@@ -1990,6 +1995,10 @@ func TestLongPath(t *testing.T) {
 					if dir.Size() != filesize || filesize != wantSize {
 						t.Errorf("Size(%q) is %d, len(ReadFile()) is %d, want %d", path, dir.Size(), filesize, wantSize)
 					}
+					err = Chmod(path, dir.Mode())
+					if err != nil {
+						t.Fatalf("Chmod(%q) failed: %v", path, err)
+					}
 				}
 				if err := Truncate(sizedTempDir+"/bar.txt", 0); err != nil {
 					t.Fatalf("Truncate failed: %v", err)
@@ -2196,22 +2205,24 @@ func TestPipeThreads(t *testing.T) {
 
 	defer debug.SetMaxThreads(debug.SetMaxThreads(threads / 2))
 
-	var wg sync.WaitGroup
-	wg.Add(threads)
-	c := make(chan bool, threads)
+	creading := make(chan bool, threads)
+	cdone := make(chan bool, threads)
 	for i := 0; i < threads; i++ {
 		go func(i int) {
-			defer wg.Done()
 			var b [1]byte
-			c <- true
+			creading <- true
 			if _, err := r[i].Read(b[:]); err != nil {
 				t.Error(err)
 			}
+			if err := r[i].Close(); err != nil {
+				t.Error(err)
+			}
+			cdone <- true
 		}(i)
 	}
 
 	for i := 0; i < threads; i++ {
-		<-c
+		<-creading
 	}
 
 	// If we are still alive, it means that the 100 goroutines did
@@ -2224,14 +2235,7 @@ func TestPipeThreads(t *testing.T) {
 		if err := w[i].Close(); err != nil {
 			t.Error(err)
 		}
-	}
-
-	wg.Wait()
-
-	for i := 0; i < threads; i++ {
-		if err := r[i].Close(); err != nil {
-			t.Error(err)
-		}
+		<-cdone
 	}
 }
 

@@ -212,7 +212,13 @@ func newnoname(s *types.Sym) *Node {
 // newfuncname generates a new name node for a function or method.
 // TODO(rsc): Use an ODCLFUNC node instead. See comment in CL 7360.
 func newfuncname(s *types.Sym) *Node {
-	n := newname(s)
+	return newfuncnamel(lineno, s)
+}
+
+// newfuncnamel generates a new name node for a function or method.
+// TODO(rsc): Use an ODCLFUNC node instead. See comment in CL 7360.
+func newfuncnamel(pos src.XPos, s *types.Sym) *Node {
+	n := newnamel(pos, s)
 	n.Func = new(Func)
 	n.Func.SetIsHiddenClosure(Curfn != nil)
 	return n
@@ -227,11 +233,15 @@ func dclname(s *types.Sym) *Node {
 }
 
 func typenod(t *types.Type) *Node {
+	return typenodl(lineno, t)
+}
+
+func typenodl(pos src.XPos, t *types.Type) *Node {
 	// if we copied another type with *t = *u
 	// then t->nod might be out of date, so
 	// check t->nod->type too
 	if asNode(t.Nod) == nil || asNode(t.Nod).Type != t {
-		t.Nod = asTypesNode(nod(OTYPE, nil, nil))
+		t.Nod = asTypesNode(nodl(pos, OTYPE, nil, nil))
 		asNode(t.Nod).Type = t
 		asNode(t.Nod).Sym = t.Sym
 	}
@@ -519,7 +529,7 @@ func funcstart(n *Node) {
 // finish the body.
 // called in auto-declaration context.
 // returns in extern-declaration context.
-func funcbody(n *Node) {
+func funcbody() {
 	// change the declaration context from auto to extern
 	if dclcontext != PAUTO {
 		Fatalf("funcbody: unexpected dclcontext %d", dclcontext)
@@ -742,7 +752,7 @@ func tointerface(l []*Node) *types.Type {
 	return t
 }
 
-func tointerface0(t *types.Type, l []*Node) *types.Type {
+func tointerface0(t *types.Type, l []*Node) {
 	if t == nil || !t.IsInterface() {
 		Fatalf("interface expected")
 	}
@@ -756,35 +766,6 @@ func tointerface0(t *types.Type, l []*Node) *types.Type {
 		fields = append(fields, f)
 	}
 	t.SetInterface(fields)
-
-	return t
-}
-
-func embedded(s *types.Sym, pkg *types.Pkg) *Node {
-	const (
-		CenterDot = 0xB7
-	)
-	// Names sometimes have disambiguation junk
-	// appended after a center dot. Discard it when
-	// making the name for the embedded struct field.
-	name := s.Name
-
-	if i := strings.Index(s.Name, string(CenterDot)); i >= 0 {
-		name = s.Name[:i]
-	}
-
-	var n *Node
-	if exportname(name) {
-		n = newname(lookup(name))
-	} else if s.Pkg == builtinpkg {
-		// The name of embedded builtins belongs to pkg.
-		n = newname(pkg.Lookup(name))
-	} else {
-		n = newname(s.Pkg.Lookup(name))
-	}
-	n = nod(ODCLFIELD, n, oldname(s))
-	n.SetEmbedded(true)
-	return n
 }
 
 func fakeRecv() *Node {
@@ -1096,9 +1077,9 @@ func makefuncsym(s *types.Sym) {
 	if s.IsBlank() {
 		return
 	}
-	if compiling_runtime && s.Name == "getg" {
-		// runtime.getg() is not a real function and so does
-		// not get a funcsym.
+	if compiling_runtime && (s.Name == "getg" || s.Name == "getclosureptr" || s.Name == "getcallerpc") {
+		// runtime.getg(), getclosureptr(), and getcallerpc() are
+		// not real functions and so do not get funcsyms.
 		return
 	}
 	if _, existed := s.Pkg.LookupOK(funcsymname(s)); !existed {
@@ -1156,7 +1137,7 @@ func checknowritebarrierrec() {
 		// the recursive case, we have to update this at most
 		// len(list) times and can stop when we an iteration
 		// that doesn't change anything.
-		for _ = range list {
+		for range list {
 			c.stable = false
 			for _, n := range list {
 				if n.Func.Pragma&Yeswritebarrierrec != 0 {

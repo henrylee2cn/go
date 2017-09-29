@@ -175,7 +175,7 @@ func loadcgo(ctxt *Link, file string, pkg string, p string) {
 				havedynamic = 1
 
 				if Headtype == objabi.Hdarwin {
-					Machoadddynlib(lib)
+					machoadddynlib(lib)
 				} else {
 					dynlib = append(dynlib, lib)
 				}
@@ -184,12 +184,10 @@ func loadcgo(ctxt *Link, file string, pkg string, p string) {
 
 			local = expandpkg(local, pkg)
 			q = ""
-			if i := strings.Index(remote, "#"); i >= 0 {
+			if i := strings.IndexByte(remote, '#'); i >= 0 {
 				remote, q = remote[:i], remote[i+1:]
 			}
 			s = ctxt.Syms.Lookup(local, 0)
-			if local != f[1] {
-			}
 			if s.Type == 0 || s.Type == SXREF || s.Type == SHOSTOBJ {
 				s.Dynimplib = lib
 				s.Extname = remote
@@ -257,8 +255,6 @@ func loadcgo(ctxt *Link, file string, pkg string, p string) {
 			} else {
 				s.Attr |= AttrCgoExportDynamic
 			}
-			if local != f[1] {
-			}
 			continue
 		}
 
@@ -321,7 +317,7 @@ func Adddynsym(ctxt *Link, s *Symbol) {
 	}
 
 	if Iself {
-		Elfadddynsym(ctxt, s)
+		elfadddynsym(ctxt, s)
 	} else if Headtype == objabi.Hdarwin {
 		Errorf(s, "adddynsym: missed symbol (Extname=%s)", s.Extname)
 	} else if Headtype == objabi.Hwindows {

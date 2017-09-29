@@ -537,7 +537,7 @@ func stripCommonPrefix(lines []string) {
 	 * Check for vertical "line of stars" and correct prefix accordingly.
 	 */
 	lineOfStars := false
-	if i := strings.Index(prefix, "*"); i >= 0 {
+	if i := strings.IndexByte(prefix, '*'); i >= 0 {
 		// Line of stars present.
 		if i > 0 && prefix[i-1] == ' ' {
 			i-- // remove trailing blank from prefix so stars remain aligned
@@ -624,7 +624,7 @@ func (p *printer) writeComment(comment *ast.Comment) {
 	if strings.HasPrefix(text, linePrefix) && (!pos.IsValid() || pos.Column == 1) {
 		// possibly a line directive
 		ldir := strings.TrimSpace(text[len(linePrefix):])
-		if i := strings.LastIndex(ldir, ":"); i >= 0 {
+		if i := strings.LastIndexByte(ldir, ':'); i >= 0 {
 			if line, err := strconv.Atoi(ldir[i+1:]); err == nil && line > 0 {
 				// The line directive we are about to print changed
 				// the Filename and Line number used for subsequent
@@ -1348,7 +1348,7 @@ func (cfg *Config) Fprint(output io.Writer, fset *token.FileSet, node interface{
 
 // Fprint "pretty-prints" an AST node to output.
 // It calls Config.Fprint with default settings.
-// Note that gofmt uses tabs for indentation but spaces for alignent;
+// Note that gofmt uses tabs for indentation but spaces for alignment;
 // use format.Node (package go/format) for output that matches gofmt.
 //
 func Fprint(output io.Writer, fset *token.FileSet, node interface{}) error {

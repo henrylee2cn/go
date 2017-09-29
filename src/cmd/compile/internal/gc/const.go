@@ -247,7 +247,7 @@ func convlit1(n *Node, t *types.Type, explicit bool, reuse canReuseNode) *Node {
 
 		return n
 
-		// target is invalid type for a constant?  leave alone.
+		// target is invalid type for a constant? leave alone.
 	case OLITERAL:
 		if !okforconst[t.Etype] && n.Type.Etype != TNIL {
 			return defaultlitreuse(n, nil, reuse)
@@ -408,7 +408,7 @@ func convlit1(n *Node, t *types.Type, explicit bool, reuse canReuseNode) *Node {
 bad:
 	if !n.Diag() {
 		if !t.Broke() {
-			yyerror("cannot convert %v to type %v", n, t)
+			yyerror("cannot convert %L to type %v", n, t)
 		}
 		n.SetDiag(true)
 	}
@@ -1194,8 +1194,6 @@ func evconst(n *Node) {
 		}
 		goto setfalse
 	}
-
-	goto ret
 
 ret:
 	norig = saveorig(n)

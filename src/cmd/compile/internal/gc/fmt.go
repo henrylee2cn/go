@@ -204,7 +204,6 @@ var goopnames = []string{
 	OSUB:      "-",
 	OSWITCH:   "switch",
 	OXOR:      "^",
-	OXFALL:    "fallthrough",
 }
 
 func (o Op) String() string {
@@ -227,13 +226,13 @@ func (o Op) format(s fmt.State, verb rune, mode fmtMode) {
 
 func (o Op) oconv(s fmt.State, flag FmtFlag, mode fmtMode) {
 	if flag&FmtSharp != 0 || mode != FDbg {
-		if o >= 0 && int(o) < len(goopnames) && goopnames[o] != "" {
+		if int(o) < len(goopnames) && goopnames[o] != "" {
 			fmt.Fprint(s, goopnames[o])
 			return
 		}
 	}
 
-	if o >= 0 && int(o) < len(opnames) && opnames[o] != "" {
+	if int(o) < len(opnames) && opnames[o] != "" {
 		fmt.Fprint(s, opnames[o])
 		return
 	}
@@ -814,7 +813,7 @@ func typefmt(t *types.Type, flag FmtFlag, mode fmtMode, depth int) string {
 		}
 		buf = append(buf, tmodeString(t.Params(), mode, depth)...)
 
-		switch t.Results().NumFields() {
+		switch t.NumResults() {
 		case 0:
 			// nothing to do
 
@@ -1080,11 +1079,7 @@ func (n *Node) stmtfmt(s fmt.State, mode fmtMode) {
 		}
 		mode.Fprintf(s, ": %v", n.Nbody)
 
-	case OBREAK,
-		OCONTINUE,
-		OGOTO,
-		OFALL,
-		OXFALL:
+	case OBREAK, OCONTINUE, OGOTO, OFALL:
 		if n.Left != nil {
 			mode.Fprintf(s, "%#v %v", n.Op, n.Left)
 		} else {
@@ -1219,7 +1214,6 @@ var opprec = []int{
 	OSELECT:     -1,
 	OSWITCH:     -1,
 	OXCASE:      -1,
-	OXFALL:      -1,
 
 	OEND: 0,
 }

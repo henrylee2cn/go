@@ -130,8 +130,19 @@ func (enc *Encoding) Encode(dst, src []byte) {
 		}
 
 		// Encode 5-bit blocks using the base32 alphabet
-		for i := 0; i < 8; i++ {
-			if len(dst) > i {
+		size := len(dst)
+		if size >= 8 {
+			// Common case, unrolled for extra performance
+			dst[0] = enc.encode[b[0]]
+			dst[1] = enc.encode[b[1]]
+			dst[2] = enc.encode[b[2]]
+			dst[3] = enc.encode[b[3]]
+			dst[4] = enc.encode[b[4]]
+			dst[5] = enc.encode[b[5]]
+			dst[6] = enc.encode[b[6]]
+			dst[7] = enc.encode[b[7]]
+		} else {
+			for i := 0; i < size; i++ {
 				dst[i] = enc.encode[b[i]]
 			}
 		}
@@ -279,19 +290,28 @@ func (enc *Encoding) decode(dst, src []byte) (n int, end bool, err error) {
 		dlen := 8
 
 		for j := 0; j < 8; {
-			if len(src) == 0 {
+
+			// We have reached the end and are missing padding
+			if len(src) == 0 && enc.padChar != NoPadding {
 				return n, false, CorruptInputError(olen - len(src) - j)
 			}
+
+			// We have reached the end and are not expecing any padding
+			if len(src) == 0 && enc.padChar == NoPadding {
+				dlen, end = j, true
+				break
+			}
+
 			in := src[0]
 			src = src[1:]
-			if in == '=' && j >= 2 && len(src) < 8 {
+			if in == byte(enc.padChar) && j >= 2 && len(src) < 8 {
 				// We've reached the end and there's padding
 				if len(src)+j < 8-1 {
 					// not enough padding
 					return n, false, CorruptInputError(olen)
 				}
 				for k := 0; k < 8-1-j; k++ {
-					if len(src) > k && src[k] != '=' {
+					if len(src) > k && src[k] != byte(enc.padChar) {
 						// incorrect padding
 						return n, false, CorruptInputError(olen - len(src) + k - 1)
 					}
@@ -332,7 +352,11 @@ func (enc *Encoding) decode(dst, src []byte) (n int, end bool, err error) {
 		case 2:
 			dst[0] = dbuf[0]<<3 | dbuf[1]>>2
 		}
-		dst = dst[5:]
+
+		if !end {
+			dst = dst[5:]
+		}
+
 		switch dlen {
 		case 2:
 			n += 1
@@ -484,4 +508,10 @@ func NewDecoder(enc *Encoding, r io.Reader) io.Reader {
 
 // DecodedLen returns the maximum length in bytes of the decoded data
 // corresponding to n bytes of base32-encoded data.
-func (enc *Encoding) DecodedLen(n int) int { return n / 8 * 5 }
+func (enc *Encoding) DecodedLen(n int) int {
+	if enc.padChar == NoPadding {
+		return n * 5 / 8
+	}
+
+	return n / 8 * 5
+}

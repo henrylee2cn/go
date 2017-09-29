@@ -89,7 +89,7 @@ var tests = []test{
 			`VarFive = 5`,                       // From block starting with unexported variable.
 			`type unexportedType`,               // No unexported type.
 			`unexportedTypedConstant`,           // No unexported typed constant.
-			`Field`,                             // No fields.
+			`\bField`,                           // No fields.
 			`Method`,                            // No methods.
 			`someArgument[5-8]`,                 // No truncated arguments.
 			`type T1 T2`,                        // Type alias does not display as type declaration.
@@ -395,14 +395,16 @@ var tests = []test{
 		"field",
 		[]string{p, `ExportedType.ExportedField`},
 		[]string{
+			`type ExportedType struct`,
 			`ExportedField int`,
 			`Comment before exported field.`,
 			`Comment on line with exported field.`,
+			`other fields elided`,
 		},
 		nil,
 	},
 
-	// Field  with -u.
+	// Field with -u.
 	{
 		"method with -u",
 		[]string{"-u", p, `ExportedType.unexportedField`},
@@ -411,6 +413,14 @@ var tests = []test{
 			`Comment on line with unexported field.`,
 		},
 		nil,
+	},
+
+	// Field of struct with only one field.
+	{
+		"single-field struct",
+		[]string{p, `ExportedStructOneField.OnlyField`},
+		[]string{`the only field`},
+		[]string{`other fields elided`},
 	},
 
 	// Case matching off.
@@ -527,6 +537,36 @@ func TestMultiplePackages(t *testing.T) {
 			if !strings.Contains(errStr, "math/rand") {
 				t.Errorf("error %q should contain math/rand", errStr)
 			}
+		}
+	}
+}
+
+// Test the code to look up packages when given two args. First test case is
+//	go doc binary BigEndian
+// This needs to find encoding/binary.BigEndian, which means
+// finding the package encoding/binary given only "binary".
+// Second case is
+//	go doc rand Float64
+// which again needs to find math/rand and not give up after crypto/rand,
+// which has no such function.
+func TestTwoArgLookup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("scanning file system takes too long")
+	}
+	maybeSkip(t)
+	var b bytes.Buffer // We don't care about the output.
+	{
+		var flagSet flag.FlagSet
+		err := do(&b, &flagSet, []string{"binary", "BigEndian"})
+		if err != nil {
+			t.Errorf("unexpected error %q from binary BigEndian", err)
+		}
+	}
+	{
+		var flagSet flag.FlagSet
+		err := do(&b, &flagSet, []string{"rand", "Float64"})
+		if err != nil {
+			t.Errorf("unexpected error %q from rand Float64", err)
 		}
 	}
 }

@@ -76,6 +76,7 @@ const (
 	ABYTE
 	ACLC
 	ACLD
+	ACLFLUSH
 	ACLI
 	ACLTS
 	ACMC
@@ -115,6 +116,7 @@ const (
 	AINCW
 	AINSB
 	AINSL
+	AINSERTPS
 	AINSW
 	AINT
 	AINTO
@@ -170,6 +172,7 @@ const (
 	AMOVSB
 	AMOVSL
 	AMOVSW
+	AMPSADBW
 	AMULB
 	AMULL
 	AMULW
@@ -188,6 +191,9 @@ const (
 	AOUTSB
 	AOUTSL
 	AOUTSW
+	APABSB
+	APABSD
+	APABSW
 	APAUSE
 	APOPAL
 	APOPAW
@@ -518,6 +524,8 @@ const (
 	AADDPS
 	AADDSD
 	AADDSS
+	AADDSUBPD
+	AADDSUBPS
 	AANDNL
 	AANDNQ
 	AANDNPD
@@ -526,6 +534,8 @@ const (
 	AANDPS
 	ABEXTRL
 	ABEXTRQ
+	ABLENDPD
+	ABLENDPS
 	ABLSIL
 	ABLSIQ
 	ABLSMSKL
@@ -566,6 +576,8 @@ const (
 	ADIVPS
 	ADIVSD
 	ADIVSS
+	ADPPD
+	ADPPS
 	AEMMS
 	AFXRSTOR
 	AFXRSTOR64
@@ -595,6 +607,7 @@ const (
 	AMOVMSKPD
 	AMOVMSKPS
 	AMOVNTO
+	AMOVNTDQA
 	AMOVNTPD
 	AMOVNTPS
 	AMOVNTQ
@@ -614,6 +627,7 @@ const (
 	AORPS
 	APACKSSLW
 	APACKSSWB
+	APACKUSDW
 	APACKUSWB
 	APADDB
 	APADDL
@@ -623,16 +637,22 @@ const (
 	APADDUSB
 	APADDUSW
 	APADDW
+	APALIGNR
 	APAND
 	APANDN
 	APAVGB
 	APAVGW
+	APBLENDW
 	APCMPEQB
 	APCMPEQL
+	APCMPEQQ
 	APCMPEQW
 	APCMPGTB
 	APCMPGTL
+	APCMPGTQ
 	APCMPGTW
+	APCMPISTRI
+	APCMPISTRM
 	APDEPL
 	APDEPQ
 	APEXTL
@@ -652,11 +672,20 @@ const (
 	APINSRD
 	APINSRQ
 	APINSRW
+	APMADDUBSW
 	APMADDWL
+	APMAXSB
+	APMAXSD
 	APMAXSW
 	APMAXUB
+	APMAXUD
+	APMAXUW
+	APMINSB
+	APMINSD
 	APMINSW
 	APMINUB
+	APMINUD
+	APMINUW
 	APMOVMSKB
 	APMOVSXBD
 	APMOVSXBQ
@@ -671,6 +700,7 @@ const (
 	APMOVZXWD
 	APMOVZXWQ
 	APMULDQ
+	APMULHRSW
 	APMULHUW
 	APMULHW
 	APMULLD
@@ -683,6 +713,9 @@ const (
 	APSHUFL
 	APSHUFLW
 	APSHUFW
+	APSIGNB
+	APSIGND
+	APSIGNW
 	APSLLL
 	APSLLO
 	APSLLQ
@@ -701,6 +734,7 @@ const (
 	APSUBUSB
 	APSUBUSW
 	APSUBW
+	APTEST
 	APUNPCKHBW
 	APUNPCKHLQ
 	APUNPCKHQDQ
@@ -740,6 +774,7 @@ const (
 	AXORPD
 	AXORPS
 	APCMPESTRI
+	APCMPESTRM
 
 	ARETFW
 	ARETFL
@@ -805,11 +840,17 @@ const (
 	AVPERM2I128
 	ARORXL
 	ARORXQ
+	AVADDSD
 	AVBROADCASTSS
 	AVBROADCASTSD
+	AVFMADD213SD
+	AVFMADD231SD
+	AVFNMADD213SD
+	AVFNMADD231SD
 	AVMOVDDUP
 	AVMOVSHDUP
 	AVMOVSLDUP
+	AVSUBSD
 
 	// from 386
 	AJCXZW
@@ -1006,3 +1047,120 @@ const (
 	T_64     = 1 << 6
 	T_GOTYPE = 1 << 7
 )
+
+// https://www.uclibc.org/docs/psABI-x86_64.pdf, figure 3.36
+var AMD64DWARFRegisters = map[int16]int16{
+	REG_AX:  0,
+	REG_DX:  1,
+	REG_CX:  2,
+	REG_BX:  3,
+	REG_SI:  4,
+	REG_DI:  5,
+	REG_BP:  6,
+	REG_SP:  7,
+	REG_R8:  8,
+	REG_R9:  9,
+	REG_R10: 10,
+	REG_R11: 11,
+	REG_R12: 12,
+	REG_R13: 13,
+	REG_R14: 14,
+	REG_R15: 15,
+	// 16 is "Return Address RA", whatever that is.
+	// XMM registers. %xmmN => XN.
+	REG_X0:  17,
+	REG_X1:  18,
+	REG_X2:  19,
+	REG_X3:  20,
+	REG_X4:  21,
+	REG_X5:  22,
+	REG_X6:  23,
+	REG_X7:  24,
+	REG_X8:  25,
+	REG_X9:  26,
+	REG_X10: 27,
+	REG_X11: 28,
+	REG_X12: 29,
+	REG_X13: 30,
+	REG_X14: 31,
+	REG_X15: 32,
+	// ST registers. %stN => FN.
+	REG_F0: 33,
+	REG_F1: 34,
+	REG_F2: 35,
+	REG_F3: 36,
+	REG_F4: 37,
+	REG_F5: 38,
+	REG_F6: 39,
+	REG_F7: 40,
+	// MMX registers. %mmN => MN.
+	REG_M0: 41,
+	REG_M1: 42,
+	REG_M2: 43,
+	REG_M3: 44,
+	REG_M4: 45,
+	REG_M5: 46,
+	REG_M6: 47,
+	REG_M7: 48,
+	// 48 is flags, which doesn't have a name.
+	REG_ES: 50,
+	REG_CS: 51,
+	REG_SS: 52,
+	REG_DS: 53,
+	REG_FS: 54,
+	REG_GS: 55,
+	// 58 and 59 are {fs,gs}base, which don't have names.
+	REG_TR:   62,
+	REG_LDTR: 63,
+	// 64-66 are mxcsr, fcw, fsw, which don't have names.
+}
+
+// https://www.uclibc.org/docs/psABI-i386.pdf, table 2.14
+var X86DWARFRegisters = map[int16]int16{
+	REG_AX: 0,
+	REG_CX: 1,
+	REG_DX: 2,
+	REG_BX: 3,
+	REG_SP: 4,
+	REG_BP: 5,
+	REG_SI: 6,
+	REG_DI: 7,
+	// 8 is "Return Address RA", whatever that is.
+	// 9 is flags, which doesn't have a name.
+	// ST registers. %stN => FN.
+	REG_F0: 11,
+	REG_F1: 12,
+	REG_F2: 13,
+	REG_F3: 14,
+	REG_F4: 15,
+	REG_F5: 16,
+	REG_F6: 17,
+	REG_F7: 18,
+	// XMM registers. %xmmN => XN.
+	REG_X0: 21,
+	REG_X1: 22,
+	REG_X2: 23,
+	REG_X3: 24,
+	REG_X4: 25,
+	REG_X5: 26,
+	REG_X6: 27,
+	REG_X7: 28,
+	// MMX registers. %mmN => MN.
+	REG_M0: 29,
+	REG_M1: 30,
+	REG_M2: 31,
+	REG_M3: 32,
+	REG_M4: 33,
+	REG_M5: 34,
+	REG_M6: 35,
+	REG_M7: 36,
+	// 39 is mxcsr, which doesn't have a name.
+	REG_ES:   40,
+	REG_CS:   41,
+	REG_SS:   42,
+	REG_DS:   43,
+	REG_FS:   44,
+	REG_GS:   45,
+	REG_TR:   48,
+	REG_LDTR: 49,
+}

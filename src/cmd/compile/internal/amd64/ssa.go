@@ -117,7 +117,7 @@ func opregreg(s *gc.SSAGenState, op obj.As, dest, src int16) *obj.Prog {
 	return p
 }
 
-// DUFFZERO consists of repeated blocks of 4 MOVUPSs + ADD,
+// DUFFZERO consists of repeated blocks of 4 MOVUPSs + LEAQ,
 // See runtime/mkduff.go.
 func duffStart(size int64) int64 {
 	x, _ := duff(size)
@@ -140,7 +140,7 @@ func duff(size int64) (int64, int64) {
 	off := dzBlockSize * (dzBlocks - blocks)
 	var adj int64
 	if steps != 0 {
-		off -= dzAddSize
+		off -= dzLeaqSize
 		off -= dzMovSize * steps
 		adj -= dzClearStep * (dzBlockLen - steps)
 	}
@@ -525,7 +525,7 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		gc.AddAux(&p.From, v)
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = v.Reg()
-	case ssa.OpAMD64MOVQloadidx8, ssa.OpAMD64MOVSDloadidx8:
+	case ssa.OpAMD64MOVQloadidx8, ssa.OpAMD64MOVSDloadidx8, ssa.OpAMD64MOVLloadidx8:
 		p := s.Prog(v.Op.Asm())
 		p.From.Type = obj.TYPE_MEM
 		p.From.Reg = v.Args[0].Reg()
@@ -573,7 +573,7 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.To.Type = obj.TYPE_MEM
 		p.To.Reg = v.Args[0].Reg()
 		gc.AddAux(&p.To, v)
-	case ssa.OpAMD64MOVQstoreidx8, ssa.OpAMD64MOVSDstoreidx8:
+	case ssa.OpAMD64MOVQstoreidx8, ssa.OpAMD64MOVSDstoreidx8, ssa.OpAMD64MOVLstoreidx8:
 		p := s.Prog(v.Op.Asm())
 		p.From.Type = obj.TYPE_REG
 		p.From.Reg = v.Args[2].Reg()
@@ -614,6 +614,29 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.To.Scale = 1
 		p.To.Index = i
 		gc.AddAux(&p.To, v)
+	case ssa.OpAMD64ADDQconstmem, ssa.OpAMD64ADDLconstmem:
+		sc := v.AuxValAndOff()
+		off := sc.Off()
+		val := sc.Val()
+		if val == 1 {
+			var asm obj.As
+			if v.Op == ssa.OpAMD64ADDQconstmem {
+				asm = x86.AINCQ
+			} else {
+				asm = x86.AINCL
+			}
+			p := s.Prog(asm)
+			p.To.Type = obj.TYPE_MEM
+			p.To.Reg = v.Args[0].Reg()
+			gc.AddAux2(&p.To, v, off)
+		} else {
+			p := s.Prog(v.Op.Asm())
+			p.From.Type = obj.TYPE_CONST
+			p.From.Offset = val
+			p.To.Type = obj.TYPE_MEM
+			p.To.Reg = v.Args[0].Reg()
+			gc.AddAux2(&p.To, v, off)
+		}
 	case ssa.OpAMD64MOVQstoreconst, ssa.OpAMD64MOVLstoreconst, ssa.OpAMD64MOVWstoreconst, ssa.OpAMD64MOVBstoreconst:
 		p := s.Prog(v.Op.Asm())
 		p.From.Type = obj.TYPE_CONST
@@ -655,6 +678,18 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		// Break false dependency on destination register.
 		opregreg(s, x86.AXORPS, r, r)
 		opregreg(s, v.Op.Asm(), r, v.Args[0].Reg())
+	case ssa.OpAMD64MOVQi2f, ssa.OpAMD64MOVQf2i:
+		p := s.Prog(x86.AMOVQ)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = v.Args[0].Reg()
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = v.Reg()
+	case ssa.OpAMD64MOVLi2f, ssa.OpAMD64MOVLf2i:
+		p := s.Prog(x86.AMOVL)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = v.Args[0].Reg()
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = v.Reg()
 	case ssa.OpAMD64ADDQmem, ssa.OpAMD64ADDLmem, ssa.OpAMD64SUBQmem, ssa.OpAMD64SUBLmem,
 		ssa.OpAMD64ANDQmem, ssa.OpAMD64ANDLmem, ssa.OpAMD64ORQmem, ssa.OpAMD64ORLmem,
 		ssa.OpAMD64XORQmem, ssa.OpAMD64XORLmem, ssa.OpAMD64ADDSDmem, ssa.OpAMD64ADDSSmem,
@@ -673,9 +708,10 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		adj := duffAdj(v.AuxInt)
 		var p *obj.Prog
 		if adj != 0 {
-			p = s.Prog(x86.AADDQ)
-			p.From.Type = obj.TYPE_CONST
+			p = s.Prog(x86.ALEAQ)
+			p.From.Type = obj.TYPE_MEM
 			p.From.Offset = adj
+			p.From.Reg = x86.REG_DI
 			p.To.Type = obj.TYPE_REG
 			p.To.Reg = x86.REG_DI
 		}
@@ -695,7 +731,11 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.To.Sym = gc.Duffcopy
 		p.To.Offset = v.AuxInt
 
-	case ssa.OpCopy, ssa.OpAMD64MOVQconvert, ssa.OpAMD64MOVLconvert: // TODO: use MOVQreg for reg->reg copies instead of OpCopy?
+	case ssa.OpAMD64MOVQconvert, ssa.OpAMD64MOVLconvert:
+		if v.Args[0].Reg() != v.Reg() {
+			v.Fatalf("MOVXconvert should be a no-op")
+		}
+	case ssa.OpCopy: // TODO: use MOVQreg for reg->reg copies instead of OpCopy?
 		if v.Type.IsMemory() {
 			return
 		}
@@ -755,6 +795,15 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		}
 	case ssa.OpAMD64CALLstatic, ssa.OpAMD64CALLclosure, ssa.OpAMD64CALLinter:
 		s.Call(v)
+
+	case ssa.OpAMD64LoweredGetCallerPC:
+		p := s.Prog(x86.AMOVQ)
+		p.From.Type = obj.TYPE_MEM
+		p.From.Offset = -8 // PC is stored 8 bytes below first parameter.
+		p.From.Name = obj.NAME_PARAM
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = v.Reg()
+
 	case ssa.OpAMD64NEGQ, ssa.OpAMD64NEGL,
 		ssa.OpAMD64BSWAPQ, ssa.OpAMD64BSWAPL,
 		ssa.OpAMD64NOTQ, ssa.OpAMD64NOTL:
@@ -838,7 +887,7 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 	case ssa.OpAMD64LoweredNilCheck:
 		// Issue a load which will fault if the input is nil.
 		// TODO: We currently use the 2-byte instruction TESTB AX, (reg).
-		// Should we use the 3-byte TESTB $0, (reg) instead?  It is larger
+		// Should we use the 3-byte TESTB $0, (reg) instead? It is larger
 		// but it doesn't have false dependency on AX.
 		// Or maybe allocate an output register and use MOVL (reg),reg2 ?
 		// That trades clobbering flags for clobbering a register.

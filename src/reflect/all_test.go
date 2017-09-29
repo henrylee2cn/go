@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode"
@@ -318,6 +319,89 @@ func TestSetValue(t *testing.T) {
 		if s != tt.s {
 			t.Errorf("#%d: have %#q, want %#q", i, s, tt.s)
 		}
+	}
+}
+
+func TestCanSetField(t *testing.T) {
+	type embed struct{ x, X int }
+	type Embed struct{ x, X int }
+	type S1 struct {
+		embed
+		x, X int
+	}
+	type S2 struct {
+		*embed
+		x, X int
+	}
+	type S3 struct {
+		Embed
+		x, X int
+	}
+	type S4 struct {
+		*Embed
+		x, X int
+	}
+
+	type testCase struct {
+		index  []int
+		canSet bool
+	}
+	tests := []struct {
+		val   Value
+		cases []testCase
+	}{{
+		val: ValueOf(&S1{}),
+		cases: []testCase{
+			{[]int{0}, false},
+			{[]int{0, 0}, false},
+			{[]int{0, 1}, true},
+			{[]int{1}, false},
+			{[]int{2}, true},
+		},
+	}, {
+		val: ValueOf(&S2{embed: &embed{}}),
+		cases: []testCase{
+			{[]int{0}, false},
+			{[]int{0, 0}, false},
+			{[]int{0, 1}, true},
+			{[]int{1}, false},
+			{[]int{2}, true},
+		},
+	}, {
+		val: ValueOf(&S3{}),
+		cases: []testCase{
+			{[]int{0}, true},
+			{[]int{0, 0}, false},
+			{[]int{0, 1}, true},
+			{[]int{1}, false},
+			{[]int{2}, true},
+		},
+	}, {
+		val: ValueOf(&S4{Embed: &Embed{}}),
+		cases: []testCase{
+			{[]int{0}, true},
+			{[]int{0, 0}, false},
+			{[]int{0, 1}, true},
+			{[]int{1}, false},
+			{[]int{2}, true},
+		},
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.val.Type().Name(), func(t *testing.T) {
+			for _, tc := range tt.cases {
+				f := tt.val
+				for _, i := range tc.index {
+					if f.Kind() == Ptr {
+						f = f.Elem()
+					}
+					f = f.Field(i)
+				}
+				if got := f.CanSet(); got != tc.canSet {
+					t.Errorf("CanSet() = %v, want %v", got, tc.canSet)
+				}
+			}
+		})
 	}
 }
 
@@ -1546,6 +1630,30 @@ func TestCallWithStruct(t *testing.T) {
 	}
 }
 
+func TestCallReturnsEmpty(t *testing.T) {
+	// Issue 21717: past-the-end pointer write in Call with
+	// nonzero-sized frame and zero-sized return value.
+	runtime.GC()
+	var finalized uint32
+	f := func() (emptyStruct, *int) {
+		i := new(int)
+		runtime.SetFinalizer(i, func(*int) { atomic.StoreUint32(&finalized, 1) })
+		return emptyStruct{}, i
+	}
+	v := ValueOf(f).Call(nil)[0] // out[0] should not alias out[1]'s memory, so the finalizer should run.
+	timeout := time.After(5 * time.Second)
+	for atomic.LoadUint32(&finalized) == 0 {
+		select {
+		case <-timeout:
+			t.Fatal("finalizer did not run")
+		default:
+		}
+		runtime.Gosched()
+		runtime.GC()
+	}
+	runtime.KeepAlive(v)
+}
+
 func BenchmarkCall(b *testing.B) {
 	fv := ValueOf(func(a, b string) {})
 	b.ReportAllocs()
@@ -2357,10 +2465,13 @@ func TestImportPath(t *testing.T) {
 }
 
 func TestFieldPkgPath(t *testing.T) {
+	type x int
 	typ := TypeOf(struct {
 		Exported   string
 		unexported string
 		OtherPkgFields
+		int // issue 21702
+		*x  // issue 21122
 	}{})
 
 	type pkgpathTest struct {
@@ -2387,6 +2498,8 @@ func TestFieldPkgPath(t *testing.T) {
 		{[]int{2}, "", true},              // OtherPkgFields
 		{[]int{2, 0}, "", false},          // OtherExported
 		{[]int{2, 1}, "reflect", false},   // otherUnexported
+		{[]int{3}, "reflect_test", true},  // int
+		{[]int{4}, "reflect_test", true},  // *x
 	})
 
 	type localOtherPkgFields OtherPkgFields
@@ -3111,7 +3224,7 @@ func TestCallPanic(t *testing.T) {
 	i := timp(0)
 	v := ValueOf(T{i, i, i, i, T2{i, i}, i, i, T2{i, i}})
 	ok(func() { call(v.Field(0).Method(0)) })         // .t0.W
-	ok(func() { call(v.Field(0).Elem().Method(0)) })  // .t0.W
+	bad(func() { call(v.Field(0).Elem().Method(0)) }) // .t0.W
 	bad(func() { call(v.Field(0).Method(1)) })        // .t0.w
 	bad(func() { call(v.Field(0).Elem().Method(2)) }) // .t0.w
 	ok(func() { call(v.Field(1).Method(0)) })         // .T1.Y
@@ -3129,10 +3242,10 @@ func TestCallPanic(t *testing.T) {
 	bad(func() { call(v.Field(3).Method(1)) })        // .NamedT1.y
 	bad(func() { call(v.Field(3).Elem().Method(3)) }) // .NamedT1.y
 
-	ok(func() { call(v.Field(4).Field(0).Method(0)) })        // .NamedT2.T1.Y
-	ok(func() { call(v.Field(4).Field(0).Elem().Method(0)) }) // .NamedT2.T1.W
-	ok(func() { call(v.Field(4).Field(1).Method(0)) })        // .NamedT2.t0.W
-	ok(func() { call(v.Field(4).Field(1).Elem().Method(0)) }) // .NamedT2.t0.W
+	ok(func() { call(v.Field(4).Field(0).Method(0)) })         // .NamedT2.T1.Y
+	ok(func() { call(v.Field(4).Field(0).Elem().Method(0)) })  // .NamedT2.T1.W
+	ok(func() { call(v.Field(4).Field(1).Method(0)) })         // .NamedT2.t0.W
+	bad(func() { call(v.Field(4).Field(1).Elem().Method(0)) }) // .NamedT2.t0.W
 
 	bad(func() { call(v.Field(5).Method(0)) })        // .namedT0.W
 	bad(func() { call(v.Field(5).Elem().Method(0)) }) // .namedT0.W
@@ -4686,41 +4799,67 @@ func TestStructOfWithInterface(t *testing.T) {
 	}
 
 	for i, table := range tests {
-		rt := StructOf(
-			[]StructField{
-				{
-					Name:      table.name,
-					Anonymous: true,
-					PkgPath:   "",
-					Type:      table.typ,
-				},
-			},
-		)
-		rv := New(rt).Elem()
-		rv.Field(0).Set(table.val)
-
-		if _, ok := rv.Interface().(Iface); ok != table.impl {
-			if table.impl {
-				t.Errorf("test-%d: type=%v fails to implement Iface.\n", i, table.typ)
-			} else {
-				t.Errorf("test-%d: type=%v should NOT implement Iface\n", i, table.typ)
+		for j := 0; j < 2; j++ {
+			var fields []StructField
+			if j == 1 {
+				fields = append(fields, StructField{
+					Name:    "Dummy",
+					PkgPath: "",
+					Type:    TypeOf(int(0)),
+				})
 			}
-			continue
-		}
+			fields = append(fields, StructField{
+				Name:      table.name,
+				Anonymous: true,
+				PkgPath:   "",
+				Type:      table.typ,
+			})
 
-		if !table.impl {
-			continue
-		}
+			// We currently do not correctly implement methods
+			// for anonymous fields other than the first.
+			// Therefore, for now, we expect those methods
+			// to not exist.  See issues 15924 and 20824.
+			// When those issues are fixed, this test of panic
+			// should be removed.
+			if j == 1 && table.impl {
+				func() {
+					defer func() {
+						if err := recover(); err == nil {
+							t.Errorf("test-%d-%d did not panic", i, j)
+						}
+					}()
+					_ = StructOf(fields)
+				}()
+				continue
+			}
 
-		v := rv.Interface().(Iface).Get()
-		if v != want {
-			t.Errorf("test-%d: x.Get()=%v. want=%v\n", i, v, want)
-		}
+			rt := StructOf(fields)
+			rv := New(rt).Elem()
+			rv.Field(j).Set(table.val)
 
-		fct := rv.MethodByName("Get")
-		out := fct.Call(nil)
-		if !DeepEqual(out[0].Interface(), want) {
-			t.Errorf("test-%d: x.Get()=%v. want=%v\n", i, out[0].Interface(), want)
+			if _, ok := rv.Interface().(Iface); ok != table.impl {
+				if table.impl {
+					t.Errorf("test-%d-%d: type=%v fails to implement Iface.\n", i, j, table.typ)
+				} else {
+					t.Errorf("test-%d-%d: type=%v should NOT implement Iface\n", i, j, table.typ)
+				}
+				continue
+			}
+
+			if !table.impl {
+				continue
+			}
+
+			v := rv.Interface().(Iface).Get()
+			if v != want {
+				t.Errorf("test-%d-%d: x.Get()=%v. want=%v\n", i, j, v, want)
+			}
+
+			fct := rv.MethodByName("Get")
+			out := fct.Call(nil)
+			if !DeepEqual(out[0].Interface(), want) {
+				t.Errorf("test-%d-%d: x.Get()=%v. want=%v\n", i, j, out[0].Interface(), want)
+			}
 		}
 	}
 }
@@ -5495,6 +5634,25 @@ func TestKeepFuncLive(t *testing.T) {
 	MakeFunc(typ, f).Call([]Value{ValueOf(10)})
 }
 
+type UnExportedFirst int
+
+func (i UnExportedFirst) ΦExported()  {}
+func (i UnExportedFirst) unexported() {}
+
+// Issue 21177
+func TestMethodByNameUnExportedFirst(t *testing.T) {
+	defer func() {
+		if recover() != nil {
+			t.Errorf("should not panic")
+		}
+	}()
+	typ := TypeOf(UnExportedFirst(0))
+	m, _ := typ.MethodByName("ΦExported")
+	if m.Name != "ΦExported" {
+		t.Errorf("got %s, expected ΦExported", m.Name)
+	}
+}
+
 // Issue 18635 (method version).
 type KeepMethodLive struct{}
 
@@ -6228,4 +6386,38 @@ func TestAliasNames(t *testing.T) {
 	if out != want {
 		t.Errorf("Talias2 print:\nhave: %s\nwant: %s", out, want)
 	}
+}
+
+func TestIssue22031(t *testing.T) {
+	type s []struct{ C int }
+
+	type t1 struct{ s }
+	type t2 struct{ f s }
+
+	tests := []Value{
+		ValueOf(t1{s{{}}}).Field(0).Index(0).Field(0),
+		ValueOf(t2{s{{}}}).Field(0).Index(0).Field(0),
+	}
+
+	for i, test := range tests {
+		if test.CanSet() {
+			t.Errorf("%d: CanSet: got true, want false", i)
+		}
+	}
+}
+
+type NonExportedFirst int
+
+func (i NonExportedFirst) ΦExported()       {}
+func (i NonExportedFirst) nonexported() int { panic("wrong") }
+
+func TestIssue22073(t *testing.T) {
+	m := ValueOf(NonExportedFirst(0)).Method(0)
+
+	if got := m.Type().NumOut(); got != 0 {
+		t.Errorf("NumOut: got %v, want 0", got)
+	}
+
+	// Shouldn't panic.
+	m.Call(nil)
 }

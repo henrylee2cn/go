@@ -56,8 +56,7 @@ func dumpobj() {
 }
 
 func dumpobj1(outfile string, mode int) {
-	var err error
-	bout, err = bio.Create(outfile)
+	bout, err := bio.Create(outfile)
 	if err != nil {
 		flusherrors()
 		fmt.Printf("can't create %s: %v\n", outfile, err)
@@ -92,7 +91,7 @@ func dumpobj1(outfile string, mode int) {
 	printheader()
 
 	if mode&modeCompilerObj != 0 {
-		dumpexport()
+		dumpexport(bout)
 	}
 
 	if writearchive {
@@ -204,24 +203,57 @@ func addptabs() {
 	}
 }
 
+func dumpGlobal(n *Node) {
+	if n.Type == nil {
+		Fatalf("external %v nil type\n", n)
+	}
+	if n.Class() == PFUNC {
+		return
+	}
+	if n.Sym.Pkg != localpkg {
+		return
+	}
+	dowidth(n.Type)
+	ggloblnod(n)
+}
+
+func dumpGlobalConst(n *Node) {
+	// only export typed constants
+	if n.Type == nil {
+		return
+	}
+	if n.Sym.Pkg != localpkg {
+		return
+	}
+	// only export integer constants for now
+	switch n.Type.Etype {
+	case TINT8:
+	case TINT16:
+	case TINT32:
+	case TINT64:
+	case TINT:
+	case TUINT8:
+	case TUINT16:
+	case TUINT32:
+	case TUINT64:
+	case TUINT:
+	case TUINTPTR:
+		// ok
+	default:
+		return
+	}
+	Ctxt.DwarfIntConst(myimportpath, n.Sym.Name, typesymname(n.Type), n.Int64())
+}
+
 func dumpglobls() {
 	// add globals
 	for _, n := range externdcl {
-		if n.Op != ONAME {
-			continue
+		switch n.Op {
+		case ONAME:
+			dumpGlobal(n)
+		case OLITERAL:
+			dumpGlobalConst(n)
 		}
-
-		if n.Type == nil {
-			Fatalf("external %v nil type\n", n)
-		}
-		if n.Class() == PFUNC {
-			continue
-		}
-		if n.Sym.Pkg != localpkg {
-			continue
-		}
-		dowidth(n.Type)
-		ggloblnod(n)
 	}
 
 	obj.SortSlice(funcsyms, func(i, j int) bool {

@@ -28,8 +28,8 @@ const (
 	traceEvProcStop          = 6  // stop of P [timestamp]
 	traceEvGCStart           = 7  // GC start [timestamp, seq, stack id]
 	traceEvGCDone            = 8  // GC done [timestamp]
-	traceEvGCScanStart       = 9  // GC mark termination start [timestamp]
-	traceEvGCScanDone        = 10 // GC mark termination done [timestamp]
+	traceEvGCSTWStart        = 9  // GC STW start [timestamp, kind]
+	traceEvGCSTWDone         = 10 // GC STW done [timestamp]
 	traceEvGCSweepStart      = 11 // GC sweep start [timestamp, stack id]
 	traceEvGCSweepDone       = 12 // GC sweep done [timestamp, swept, reclaimed]
 	traceEvGoCreate          = 13 // goroutine creation [timestamp, new goroutine id, new stack id, stack id]
@@ -277,10 +277,9 @@ func StopTrace() {
 
 	traceGoSched()
 
-	for _, p := range &allp {
-		if p == nil {
-			break
-		}
+	// Loop over all allocated Ps because dead Ps may still have
+	// trace buffers.
+	for _, p := range allp[:cap(allp)] {
 		buf := p.tracebuf
 		if buf != 0 {
 			traceFullQueue(buf)
@@ -320,10 +319,7 @@ func StopTrace() {
 
 	// The lock protects us from races with StartTrace/StopTrace because they do stop-the-world.
 	lock(&trace.lock)
-	for _, p := range &allp {
-		if p == nil {
-			break
-		}
+	for _, p := range allp[:cap(allp)] {
 		if p.tracebuf != 0 {
 			throw("trace: non-empty trace buffer in proc")
 		}
@@ -382,7 +378,7 @@ func ReadTrace() []byte {
 		trace.headerWritten = true
 		trace.lockOwner = nil
 		unlock(&trace.lock)
-		return []byte("go 1.9 trace\x00\x00\x00\x00")
+		return []byte("go 1.10 trace\x00\x00\x00")
 	}
 	// Wait for new data.
 	if trace.fullHead == 0 && !trace.shutdown {
@@ -408,9 +404,12 @@ func ReadTrace() []byte {
 		var data []byte
 		data = append(data, traceEvFrequency|0<<traceArgCountShift)
 		data = traceAppend(data, uint64(freq))
-		if timers.gp != nil {
-			data = append(data, traceEvTimerGoroutine|0<<traceArgCountShift)
-			data = traceAppend(data, uint64(timers.gp.goid))
+		for i := range timers {
+			tb := &timers[i]
+			if tb.gp != nil {
+				data = append(data, traceEvTimerGoroutine|0<<traceArgCountShift)
+				data = traceAppend(data, uint64(tb.gp.goid))
+			}
 		}
 		// This will emit a bunch of full buffers, we will pick them up
 		// on the next iteration.
@@ -924,12 +923,12 @@ func traceGCDone() {
 	traceEvent(traceEvGCDone, -1)
 }
 
-func traceGCScanStart() {
-	traceEvent(traceEvGCScanStart, -1)
+func traceGCSTWStart(kind int) {
+	traceEvent(traceEvGCSTWStart, -1, uint64(kind))
 }
 
-func traceGCScanDone() {
-	traceEvent(traceEvGCScanDone, -1)
+func traceGCSTWDone() {
+	traceEvent(traceEvGCSTWDone, -1)
 }
 
 // traceGCSweepStart prepares to trace a sweep loop. This does not

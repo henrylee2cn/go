@@ -129,7 +129,7 @@ const (
 	// consulted to avoid bugs where a symbol is put on a list twice.
 	AttrOnList
 	// AttrLocal marks symbols that are only visible within the module
-	// (exectuable or shared library) being linked. Only relevant when
+	// (executable or shared library) being linked. Only relevant when
 	// dynamically linking Go code.
 	AttrLocal
 	// AttrReflectMethod marks certain methods from the reflect package that
@@ -185,7 +185,7 @@ func (a *Attribute) Set(flag Attribute, value bool) {
 type Reloc struct {
 	Off     int32            // offset to rewrite
 	Siz     uint8            // number of bytes to rewrite, 1, 2, or 4
-	Done    uint8            // set to 1 when relocation is complete
+	Done    bool             // set to true when relocation is complete
 	Variant RelocVariant     // variation on Type
 	Type    objabi.RelocType // the relocation type
 	Add     int64            // addend
@@ -330,3 +330,47 @@ const (
 	RV_CHECK_OVERFLOW RelocVariant = 1 << 7
 	RV_TYPE_MASK      RelocVariant = RV_CHECK_OVERFLOW - 1
 )
+
+func RelocName(r objabi.RelocType) string {
+	// We didn't have some relocation types at Go1.4.
+	// Uncomment code when we include those in bootstrap code.
+
+	switch {
+	case r >= 512: // Mach-O
+		// nr := (r - 512)>>1
+		// switch SysArch.Family {
+		// case sys.AMD64:
+		// 	return macho.RelocTypeX86_64(nr).String()
+		// case sys.ARM:
+		// 	return macho.RelocTypeARM(nr).String()
+		// case sys.ARM64:
+		// 	return macho.RelocTypeARM64(nr).String()
+		// case sys.I386:
+		// 	return macho.RelocTypeGeneric(nr).String()
+		// default:
+		// 	panic("unreachable")
+		// }
+	case r >= 256: // ELF
+		nr := r - 256
+		switch SysArch.Family {
+		case sys.AMD64:
+			return elf.R_X86_64(nr).String()
+		case sys.ARM:
+			return elf.R_ARM(nr).String()
+		case sys.ARM64:
+			return elf.R_AARCH64(nr).String()
+		case sys.I386:
+			return elf.R_386(nr).String()
+		case sys.MIPS, sys.MIPS64:
+			// return elf.R_MIPS(nr).String()
+		case sys.PPC64:
+			// return elf.R_PPC64(nr).String()
+		case sys.S390X:
+			// return elf.R_390(nr).String()
+		default:
+			panic("unreachable")
+		}
+	}
+
+	return r.String()
+}

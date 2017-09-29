@@ -402,9 +402,10 @@ func (check *Checker) updateExprType(x ast.Expr, typ Type, final bool) {
 
 	case *ast.UnaryExpr:
 		// If x is a constant, the operands were constants.
-		// They don't need to be updated since they never
-		// get "materialized" into a typed value; and they
-		// will be processed at the end of the type check.
+		// The operands don't need to be updated since they
+		// never get "materialized" into a typed value. If
+		// left in the untyped map, they will be processed
+		// at the end of the type check.
 		if old.val != nil {
 			break
 		}
@@ -443,12 +444,21 @@ func (check *Checker) updateExprType(x ast.Expr, typ Type, final bool) {
 	// Remove it from the map of yet untyped expressions.
 	delete(check.untyped, x)
 
-	// If x is the lhs of a shift, its final type must be integer.
-	// We already know from the shift check that it is representable
-	// as an integer if it is a constant.
-	if old.isLhs && !isInteger(typ) {
-		check.invalidOp(x.Pos(), "shifted operand %s (type %s) must be integer", x, typ)
-		return
+	if old.isLhs {
+		// If x is the lhs of a shift, its final type must be integer.
+		// We already know from the shift check that it is representable
+		// as an integer if it is a constant.
+		if !isInteger(typ) {
+			check.invalidOp(x.Pos(), "shifted operand %s (type %s) must be integer", x, typ)
+			return
+		}
+	} else if old.val != nil {
+		// If x is a constant, it must be representable as a value of typ.
+		c := operand{old.mode, x, old.typ, old.val, 0}
+		check.convertUntyped(&c, typ)
+		if c.mode == invalid {
+			return
+		}
 	}
 
 	// Everything's fine, record final type and value for x.
@@ -1125,6 +1135,16 @@ func (check *Checker) exprInternal(x *operand, e ast.Expr, hint Type) exprKind {
 			}
 
 		case *Array:
+			// Prevent crash if the array referred to is not yet set up.
+			// This is a stop-gap solution; a better approach would use the mechanism of
+			// Checker.ident (typexpr.go) using a path of types. But that would require
+			// passing the path everywhere (all expression-checking methods, not just
+			// type expression checking), and we're not set up for that (quite possibly
+			// an indication that cycle detection needs to be rethought). Was issue #18643.
+			if utyp.elem == nil {
+				check.error(e.Pos(), "illegal cycle in type declaration")
+				goto Error
+			}
 			n := check.indexedElts(e.Elts, utyp.elem, utyp.len)
 			// If we have an "open" [...]T array, set the length now that we know it
 			// and record the type for [...] (usually done by check.typExpr which is
@@ -1135,9 +1155,21 @@ func (check *Checker) exprInternal(x *operand, e ast.Expr, hint Type) exprKind {
 			}
 
 		case *Slice:
+			// Prevent crash if the slice referred to is not yet set up.
+			// See analogous comment for *Array.
+			if utyp.elem == nil {
+				check.error(e.Pos(), "illegal cycle in type declaration")
+				goto Error
+			}
 			check.indexedElts(e.Elts, utyp.elem, -1)
 
 		case *Map:
+			// Prevent crash if the map referred to is not yet set up.
+			// See analogous comment for *Array.
+			if utyp.key == nil || utyp.elem == nil {
+				check.error(e.Pos(), "illegal cycle in type declaration")
+				goto Error
+			}
 			visited := make(map[interface{}][]Type, len(e.Elts))
 			for _, e := range e.Elts {
 				kv, _ := e.(*ast.KeyValueExpr)

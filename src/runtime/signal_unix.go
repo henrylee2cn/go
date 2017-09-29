@@ -8,9 +8,18 @@ package runtime
 
 import (
 	"runtime/internal/atomic"
-	"runtime/internal/sys"
 	"unsafe"
 )
+
+// sigTabT is the type of an entry in the global sigtable array.
+// sigtable is inherently system dependent, and appears in OS-specific files,
+// but sigTabT is the same for all Unixy systems.
+// The sigtable array is indexed by a system signal number to get the flags
+// and printable name of each signal.
+type sigTabT struct {
+	flags int32
+	name  string
+}
 
 //go:linkname os_sigpipe os.sigpipe
 func os_sigpipe() {
@@ -395,8 +404,9 @@ func sigpanic() {
 //go:nosplit
 //go:nowritebarrierrec
 func dieFromSignal(sig uint32) {
-	setsig(sig, _SIG_DFL)
 	unblocksig(sig)
+	// Mark the signal as unhandled to ensure it is forwarded.
+	atomic.Store(&handlingSig[sig], 0)
 	raise(sig)
 
 	// That should have killed us. On some systems, though, raise
@@ -404,6 +414,14 @@ func dieFromSignal(sig uint32) {
 	// the current thread, which means that the signal may not yet
 	// have been delivered. Give other threads a chance to run and
 	// pick up the signal.
+	osyield()
+	osyield()
+	osyield()
+
+	// If that didn't work, try _SIG_DFL.
+	setsig(sig, _SIG_DFL)
+	raise(sig)
+
 	osyield()
 	osyield()
 	osyield()
@@ -474,7 +492,7 @@ func crash() {
 		// this means the OS X core file will be >128 GB and even on a zippy
 		// workstation can take OS X well over an hour to write (uninterruptible).
 		// Save users from making that mistake.
-		if sys.PtrSize == 8 {
+		if GOARCH == "amd64" {
 			return
 		}
 	}
@@ -578,17 +596,23 @@ func sigfwdgo(sig uint32, info *siginfo, ctx unsafe.Pointer) bool {
 		return false
 	}
 	fwdFn := atomic.Loaduintptr(&fwdSig[sig])
+	flags := sigtable[sig].flags
 
-	if !signalsOK {
-		// The only way we can get here is if we are in a
-		// library or archive, we installed a signal handler
-		// at program startup, but the Go runtime has not yet
-		// been initialized.
-		if fwdFn == _SIG_DFL {
-			dieFromSignal(sig)
-		} else {
-			sigfwd(fwdFn, sig, info, ctx)
+	// If we aren't handling the signal, forward it.
+	if atomic.Load(&handlingSig[sig]) == 0 || !signalsOK {
+		// If the signal is ignored, doing nothing is the same as forwarding.
+		if fwdFn == _SIG_IGN || (fwdFn == _SIG_DFL && flags&_SigIgn != 0) {
+			return true
 		}
+		// We are not handling the signal and there is no other handler to forward to.
+		// Crash with the default behavior.
+		if fwdFn == _SIG_DFL {
+			setsig(sig, _SIG_DFL)
+			dieFromSignal(sig)
+			return false
+		}
+
+		sigfwd(fwdFn, sig, info, ctx)
 		return true
 	}
 
@@ -596,18 +620,6 @@ func sigfwdgo(sig uint32, info *siginfo, ctx unsafe.Pointer) bool {
 	if fwdFn == _SIG_DFL {
 		return false
 	}
-
-	// If we aren't handling the signal, forward it.
-	// Really if we aren't handling the signal, we shouldn't get here,
-	// but on Darwin setsigstack can lead us here because it sets
-	// the sa_tramp field. The sa_tramp field is not returned by
-	// sigaction, so the fix for that is non-obvious.
-	if atomic.Load(&handlingSig[sig]) == 0 {
-		sigfwd(fwdFn, sig, info, ctx)
-		return true
-	}
-
-	flags := sigtable[sig].flags
 
 	c := &sigctxt{info, ctx}
 	// Only forward synchronous signals and SIGPIPE.

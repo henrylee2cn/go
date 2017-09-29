@@ -292,7 +292,10 @@ func defaultContext() Context {
 	// say "+build go1.x", and code that should only be built before Go 1.x
 	// (perhaps it is the stub to use in that case) should say "+build !go1.x".
 	// NOTE: If you add to this list, also update the doc comment in doc.go.
-	c.ReleaseTags = []string{"go1.1", "go1.2", "go1.3", "go1.4", "go1.5", "go1.6", "go1.7", "go1.8", "go1.9"}
+	const version = 10 // go1.10
+	for i := 1; i <= version; i++ {
+		c.ReleaseTags = append(c.ReleaseTags, "go1."+strconv.Itoa(i))
+	}
 
 	env := os.Getenv("CGO_ENABLED")
 	if env == "" {
@@ -462,7 +465,7 @@ func (e *MultiplePackageError) Error() string {
 }
 
 func nameExt(name string) string {
-	i := strings.LastIndex(name, ".")
+	i := strings.LastIndexByte(name, '.')
 	if i < 0 {
 		return ""
 	}
@@ -607,7 +610,7 @@ func (ctxt *Context) Import(path string, srcDir string, mode ImportMode) (*Packa
 						}
 						tried.vendor = append(tried.vendor, dir)
 					}
-					i := strings.LastIndex(sub, "/")
+					i := strings.LastIndexByte(sub, '/')
 					if i < 0 {
 						break
 					}
@@ -1061,7 +1064,7 @@ func (ctxt *Context) matchFile(dir, name string, allTags map[string]bool, binary
 		return
 	}
 
-	i := strings.LastIndex(name, ".")
+	i := strings.LastIndexByte(name, '.')
 	if i < 0 {
 		i = len(name)
 	}
@@ -1195,24 +1198,25 @@ func (ctxt *Context) shouldBuild(content []byte, allTags map[string]bool, binary
 			p = p[len(p):]
 		}
 		line = bytes.TrimSpace(line)
-		if bytes.HasPrefix(line, slashslash) {
-			if bytes.Equal(line, binaryOnlyComment) {
-				sawBinaryOnly = true
-			}
-			line = bytes.TrimSpace(line[len(slashslash):])
-			if len(line) > 0 && line[0] == '+' {
-				// Looks like a comment +line.
-				f := strings.Fields(string(line))
-				if f[0] == "+build" {
-					ok := false
-					for _, tok := range f[1:] {
-						if ctxt.match(tok, allTags) {
-							ok = true
-						}
+		if !bytes.HasPrefix(line, slashslash) {
+			continue
+		}
+		if bytes.Equal(line, binaryOnlyComment) {
+			sawBinaryOnly = true
+		}
+		line = bytes.TrimSpace(line[len(slashslash):])
+		if len(line) > 0 && line[0] == '+' {
+			// Looks like a comment +line.
+			f := strings.Fields(string(line))
+			if f[0] == "+build" {
+				ok := false
+				for _, tok := range f[1:] {
+					if ctxt.match(tok, allTags) {
+						ok = true
 					}
-					if !ok {
-						allok = false
-					}
+				}
+				if !ok {
+					allok = false
 				}
 			}
 		}
@@ -1243,7 +1247,7 @@ func (ctxt *Context) saveCgo(filename string, di *Package, cg *ast.CommentGroup)
 
 		// Split at colon.
 		line = strings.TrimSpace(line[4:])
-		i := strings.Index(line, ":")
+		i := strings.IndexByte(line, ':')
 		if i < 0 {
 			return fmt.Errorf("%s: invalid #cgo line: %s", filename, orig)
 		}
@@ -1458,7 +1462,7 @@ func (ctxt *Context) match(name string, allTags map[string]bool) bool {
 		}
 		return false
 	}
-	if i := strings.Index(name, ","); i >= 0 {
+	if i := strings.IndexByte(name, ','); i >= 0 {
 		// comma-separated list
 		ok1 := ctxt.match(name[:i], allTags)
 		ok2 := ctxt.match(name[i+1:], allTags)
@@ -1522,7 +1526,7 @@ func (ctxt *Context) match(name string, allTags map[string]bool) bool {
 //
 // An exception: if GOOS=android, then files with GOOS=linux are also matched.
 func (ctxt *Context) goodOSArchFile(name string, allTags map[string]bool) bool {
-	if dot := strings.Index(name, "."); dot != -1 {
+	if dot := strings.IndexByte(name, '.'); dot != -1 {
 		name = name[:dot]
 	}
 
@@ -1533,7 +1537,7 @@ func (ctxt *Context) goodOSArchFile(name string, allTags map[string]bool) bool {
 	// systems, such as android, to arrive without breaking existing code with
 	// innocuous source code in "android.go". The easiest fix: cut everything
 	// in the name before the initial _.
-	i := strings.Index(name, "_")
+	i := strings.IndexByte(name, '_')
 	if i < 0 {
 		return true
 	}

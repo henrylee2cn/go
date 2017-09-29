@@ -452,12 +452,8 @@ func downloadPackage(p *load.Package) error {
 	// Check that this is an appropriate place for the repo to be checked out.
 	// The target directory must either not exist or have a repo checked out already.
 	meta := filepath.Join(root, "."+vcs.cmd)
-	st, err := os.Stat(meta)
-	if err == nil && !st.IsDir() {
-		return fmt.Errorf("%s exists but is not a directory", meta)
-	}
-	if err != nil {
-		// Metadata directory does not exist. Prepare to checkout new copy.
+	if _, err := os.Stat(meta); err != nil {
+		// Metadata file or directory does not exist. Prepare to checkout new copy.
 		// Some version control tools require the target directory not to exist.
 		// We require that too, just to avoid stepping on existing work.
 		if _, err := os.Stat(root); err == nil {
@@ -500,7 +496,7 @@ func downloadPackage(p *load.Package) error {
 		return err
 	}
 	vers := runtime.Version()
-	if i := strings.Index(vers, " "); i >= 0 {
+	if i := strings.IndexByte(vers, ' '); i >= 0 {
 		vers = vers[:i]
 	}
 	if err := vcs.tagSync(root, selectTag(vers, tags)); err != nil {

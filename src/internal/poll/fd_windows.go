@@ -154,6 +154,10 @@ func (s *ioSrv) ProcessRemoteIO() {
 // is available. Alternatively, it passes the request onto
 // runtime netpoll and waits for completion or cancels request.
 func (s *ioSrv) ExecIO(o *operation, submit func(o *operation) error) (int, error) {
+	if o.fd.pd.runtimeCtx == 0 {
+		return 0, errors.New("internal error: polling on unsupported descriptor type")
+	}
+
 	if !canCancelIO {
 		onceStartServer.Do(startServer)
 	}
@@ -274,6 +278,9 @@ type FD struct {
 	readbyte       []byte   // buffer to hold decoding of readuint16 from utf16 to utf8
 	readbyteOffset int      // readbyte[readOffset:] is yet to be consumed with file.Read
 
+	// Semaphore signaled when file is closed.
+	csema uint32
+
 	skipSyncNotif bool
 
 	// Whether this is a streaming descriptor, as opposed to a
@@ -291,11 +298,15 @@ type FD struct {
 	isDir bool
 }
 
+// logInitFD is set by tests to enable file descriptor initialization logging.
+var logInitFD func(net string, fd *FD, err error)
+
 // Init initializes the FD. The Sysfd field should already be set.
 // This can be called multiple times on a single FD.
 // The net argument is a network name from the net package (e.g., "tcp"),
 // or "file" or "console" or "dir".
-func (fd *FD) Init(net string) (string, error) {
+// Set pollable to true if fd should be managed by runtime netpoll.
+func (fd *FD) Init(net string, pollable bool) (string, error) {
 	if initErr != nil {
 		return "", initErr
 	}
@@ -315,7 +326,25 @@ func (fd *FD) Init(net string) (string, error) {
 		return "", errors.New("internal error: unknown network type " + net)
 	}
 
-	if err := fd.pd.init(fd); err != nil {
+	var err error
+	if pollable {
+		// Only call init for a network socket.
+		// This means that we don't add files to the runtime poller.
+		// Adding files to the runtime poller can confuse matters
+		// if the user is doing their own overlapped I/O.
+		// See issue #21172.
+		//
+		// In general the code below avoids calling the ExecIO
+		// method for non-network sockets. If some method does
+		// somehow call ExecIO, then ExecIO, and therefore the
+		// calling method, will return an error, because
+		// fd.pd.runtimeCtx will be 0.
+		err = fd.pd.init(fd)
+	}
+	if logInitFD != nil {
+		logInitFD(net, fd, err)
+	}
+	if err != nil {
 		return "", err
 	}
 	if hasLoadSetFileCompletionNotificationModes {
@@ -373,6 +402,7 @@ func (fd *FD) destroy() error {
 		err = CloseFunc(fd.Sysfd)
 	}
 	fd.Sysfd = syscall.InvalidHandle
+	runtime_Semrelease(&fd.csema)
 	return err
 }
 
@@ -384,7 +414,11 @@ func (fd *FD) Close() error {
 	}
 	// unblock pending reader and writer
 	fd.pd.evict()
-	return fd.decref()
+	err := fd.decref()
+	// Wait until the descriptor is closed. If this was the only
+	// reference, it is already closed.
+	runtime_Semacquire(&fd.csema)
+	return err
 }
 
 // Shutdown wraps the shutdown network call.

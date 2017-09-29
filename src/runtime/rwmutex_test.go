@@ -16,31 +16,29 @@ import (
 	"testing"
 )
 
-func parallelReader(m *RWMutex, clocked, cunlock, cdone chan bool) {
+func parallelReader(m *RWMutex, clocked chan bool, cunlock *uint32, cdone chan bool) {
 	m.RLock()
 	clocked <- true
-	<-cunlock
+	for atomic.LoadUint32(cunlock) == 0 {
+	}
 	m.RUnlock()
 	cdone <- true
 }
 
-func doTestParallelReaders(numReaders, gomaxprocs int) {
-	GOMAXPROCS(gomaxprocs)
+func doTestParallelReaders(numReaders int) {
+	GOMAXPROCS(numReaders + 1)
 	var m RWMutex
-	m.Init()
-	clocked := make(chan bool)
-	cunlock := make(chan bool)
+	clocked := make(chan bool, numReaders)
+	var cunlock uint32
 	cdone := make(chan bool)
 	for i := 0; i < numReaders; i++ {
-		go parallelReader(&m, clocked, cunlock, cdone)
+		go parallelReader(&m, clocked, &cunlock, cdone)
 	}
 	// Wait for all parallel RLock()s to succeed.
 	for i := 0; i < numReaders; i++ {
 		<-clocked
 	}
-	for i := 0; i < numReaders; i++ {
-		cunlock <- true
-	}
+	atomic.StoreUint32(&cunlock, 1)
 	// Wait for the goroutines to finish.
 	for i := 0; i < numReaders; i++ {
 		<-cdone
@@ -49,9 +47,9 @@ func doTestParallelReaders(numReaders, gomaxprocs int) {
 
 func TestParallelRWMutexReaders(t *testing.T) {
 	defer GOMAXPROCS(GOMAXPROCS(-1))
-	doTestParallelReaders(1, 4)
-	doTestParallelReaders(3, 4)
-	doTestParallelReaders(4, 2)
+	doTestParallelReaders(1)
+	doTestParallelReaders(3)
+	doTestParallelReaders(4)
 }
 
 func reader(rwm *RWMutex, num_iterations int, activity *int32, cdone chan bool) {
@@ -89,7 +87,6 @@ func HammerRWMutex(gomaxprocs, numReaders, num_iterations int) {
 	// Number of active readers + 10000 * number of active writers.
 	var activity int32
 	var rwm RWMutex
-	rwm.Init()
 	cdone := make(chan bool)
 	go writer(&rwm, num_iterations, &activity, cdone)
 	var i int
@@ -131,7 +128,6 @@ func BenchmarkRWMutexUncontended(b *testing.B) {
 	}
 	b.RunParallel(func(pb *testing.PB) {
 		var rwm PaddedRWMutex
-		rwm.RWMutex.Init()
 		for pb.Next() {
 			rwm.RLock()
 			rwm.RLock()
@@ -145,7 +141,6 @@ func BenchmarkRWMutexUncontended(b *testing.B) {
 
 func benchmarkRWMutex(b *testing.B, localWork, writeRatio int) {
 	var rwm RWMutex
-	rwm.Init()
 	b.RunParallel(func(pb *testing.PB) {
 		foo := 0
 		for pb.Next() {
