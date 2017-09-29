@@ -224,8 +224,7 @@ const testFlag2 = `
 	    exhaustive tests.
 
 	-timeout d
-	    If the cumulative test time for a package runs longer than
-	    duration d, panic. Timeout is disabled if set to 0.
+	    If a test binary runs longer than duration d, panic.
 	    The default is 10 minutes (10m).
 
 	-v
@@ -426,11 +425,11 @@ var (
 	testKillTimeout = 10 * time.Minute
 )
 
-var testMainDeps = map[string]bool{
+var testMainDeps = []string{
 	// Dependencies for testmain.
-	"testing":                   true,
-	"testing/internal/testdeps": true,
-	"os": true,
+	"os",
+	"testing",
+	"testing/internal/testdeps",
 }
 
 func runTest(cmd *base.Command, args []string) {
@@ -491,7 +490,7 @@ func runTest(cmd *base.Command, args []string) {
 		cfg.BuildV = testV
 
 		deps := make(map[string]bool)
-		for dep := range testMainDeps {
+		for _, dep := range testMainDeps {
 			deps[dep] = true
 		}
 
@@ -677,7 +676,7 @@ func runTest(cmd *base.Command, args []string) {
 
 // ensures that package p imports the named package
 func ensureImport(p *load.Package, pkg string) {
-	for _, d := range p.Internal.Deps {
+	for _, d := range p.Internal.Imports {
 		if d.Name == pkg {
 			return
 		}
@@ -888,7 +887,11 @@ func builderTest(b *work.Builder, p *load.Package) (buildAction, runAction, prin
 
 	// The generated main also imports testing, regexp, and os.
 	stk.Push("testmain")
-	for dep := range testMainDeps {
+	deps := testMainDeps
+	if cfg.ExternalLinkingForced() {
+		deps = str.StringList(deps, "runtime/cgo")
+	}
+	for _, dep := range deps {
 		if dep == ptest.ImportPath {
 			pmain.Internal.Imports = append(pmain.Internal.Imports, ptest)
 		} else {
@@ -1108,13 +1111,7 @@ func recompileForTest(pmain, preal, ptest *load.Package, testDir string) {
 			}
 		}
 
-		// Update p.Deps and p.Internal.Imports to use at test copies.
-		for i, dep := range p.Internal.Deps {
-			if p1 := testCopy[dep]; p1 != nil && p1 != dep {
-				split()
-				p.Internal.Deps[i] = p1
-			}
-		}
+		// Update p.Internal.Imports to use test copies.
 		for i, imp := range p.Internal.Imports {
 			if p1 := testCopy[imp]; p1 != nil && p1 != imp {
 				split()

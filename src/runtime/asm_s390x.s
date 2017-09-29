@@ -656,9 +656,9 @@ TEXT setg_gcc<>(SB),NOSPLIT|NOFRAME,$0-0
 	MOVD	R1, LR
 	RET
 
-TEXT runtime·getcallerpc(SB),NOSPLIT,$8-16
-	MOVD	16(R15), R3		// LR saved by caller
-	MOVD	R3, ret+8(FP)
+TEXT runtime·getcallerpc(SB),NOSPLIT|NOFRAME,$0-8
+	MOVD	0(R15), R3		// LR saved by caller
+	MOVD	R3, ret+0(FP)
 	RET
 
 TEXT runtime·abort(SB),NOSPLIT|NOFRAME,$0-0
@@ -676,23 +676,6 @@ TEXT runtime·cputicks(SB),NOSPLIT,$0-8
 	SLD	$1, R3
 	SRD	$1, R3
 	MOVD	R3, ret+0(FP)
-	RET
-
-// memhash_varlen(p unsafe.Pointer, h seed) uintptr
-// redirects to memhash(p, h, size) using the size
-// stored in the closure.
-TEXT runtime·memhash_varlen(SB),NOSPLIT,$40-24
-	GO_ARGS
-	NO_LOCAL_POINTERS
-	MOVD	p+0(FP), R3
-	MOVD	h+8(FP), R4
-	MOVD	8(R12), R5
-	MOVD	R3, 8(R15)
-	MOVD	R4, 16(R15)
-	MOVD	R5, 24(R15)
-	BL	runtime·memhash(SB)
-	MOVD	32(R15), R3
-	MOVD	R3, ret+16(FP)
 	RET
 
 // AES hashing not implemented for s390x
@@ -719,18 +702,6 @@ TEXT runtime·memequal_varlen(SB),NOSPLIT|NOFRAME,$0-17
 	MOVD	b+8(FP), R5
 	MOVD	8(R12), R6    // compiler stores size at offset 8 in the closure
 	LA	ret+16(FP), R7
-	BR	runtime·memeqbody(SB)
-
-// eqstring tests whether two strings are equal.
-// The compiler guarantees that strings passed
-// to eqstring have equal length.
-// See runtime_test.go:eqstring_generic for
-// equivalent Go code.
-TEXT runtime·eqstring(SB),NOSPLIT|NOFRAME,$0-33
-	MOVD	s1_base+0(FP), R3
-	MOVD	s1_len+8(FP), R6
-	MOVD	s2_base+16(FP), R5
-	LA	ret+32(FP), R7
 	BR	runtime·memeqbody(SB)
 
 TEXT bytes·Equal(SB),NOSPLIT|NOFRAME,$0-49
@@ -948,18 +919,6 @@ TEXT runtime·goexit(SB),NOSPLIT|NOFRAME,$0-0
 	BL	runtime·goexit1(SB)	// does not return
 	// traceback from goexit1 must hit code range of goexit
 	BYTE $0x07; BYTE $0x00; // 2-byte nop
-
-TEXT runtime·prefetcht0(SB),NOSPLIT,$0-8
-	RET
-
-TEXT runtime·prefetcht1(SB),NOSPLIT,$0-8
-	RET
-
-TEXT runtime·prefetcht2(SB),NOSPLIT,$0-8
-	RET
-
-TEXT runtime·prefetchnta(SB),NOSPLIT,$0-8
-	RET
 
 TEXT runtime·sigreturn(SB),NOSPLIT,$0-0
 	RET

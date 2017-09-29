@@ -212,7 +212,7 @@ type Type interface {
 // t.FieldByName("x") is not well defined if the struct type t contains
 // multiple fields named x (embedded from different packages).
 // FieldByName may return one of the fields named x or may report that there are none.
-// See golang.org/issue/4876 for more details.
+// See https://golang.org/issue/4876 for more details.
 
 /*
  * These data structures are known to the compiler (../../cmd/internal/gc/reflect.go).
@@ -531,7 +531,7 @@ func round(n, a uintptr) uintptr {
 	return (n + a - 1) &^ (a - 1)
 }
 
-func newName(n, tag, pkgPath string, exported bool) name {
+func newName(n, tag string, exported bool) name {
 	if len(n) > 1<<16-1 {
 		panic("reflect.nameFrom: name too long: " + n)
 	}
@@ -548,9 +548,6 @@ func newName(n, tag, pkgPath string, exported bool) name {
 		l += 2 + len(tag)
 		bits |= 1 << 1
 	}
-	if pkgPath != "" {
-		bits |= 1 << 2
-	}
 
 	b := make([]byte, l)
 	b[0] = bits
@@ -562,10 +559,6 @@ func newName(n, tag, pkgPath string, exported bool) name {
 		tb[0] = uint8(len(tag) >> 8)
 		tb[1] = uint8(len(tag))
 		copy(tb[2:], tag)
-	}
-
-	if pkgPath != "" {
-		panic("reflect: creating a name with a package path is not supported")
 	}
 
 	return name{bytes: &b[0]}
@@ -878,11 +871,15 @@ func (t *rtype) MethodByName(name string) (m Method, ok bool) {
 		return Method{}, false
 	}
 	utmethods := ut.methods()
+	var eidx int
 	for i := 0; i < int(ut.mcount); i++ {
 		p := utmethods[i]
 		pname := t.nameOff(p.name)
-		if pname.isExported() && pname.name() == name {
-			return t.Method(i), true
+		if pname.isExported() {
+			if pname.name() == name {
+				return t.Method(eidx), true
+			}
+			eidx++
 		}
 	}
 	return Method{}, false
@@ -1219,10 +1216,7 @@ func (t *structType) Field(i int) (f StructField) {
 	f.Name = p.name.name()
 	f.Anonymous = p.anon()
 	if !p.name.isExported() {
-		f.PkgPath = p.name.pkgPath()
-		if f.PkgPath == "" {
-			f.PkgPath = t.pkgPath.name()
-		}
+		f.PkgPath = t.pkgPath.name()
 	}
 	if tag := p.name.tag(); tag != "" {
 		f.Tag = StructTag(tag)
@@ -1436,7 +1430,7 @@ func (t *rtype) ptrTo() *rtype {
 	prototype := *(**ptrType)(unsafe.Pointer(&iptr))
 	pp := *prototype
 
-	pp.str = resolveReflectName(newName(s, "", "", false))
+	pp.str = resolveReflectName(newName(s, "", false))
 	pp.ptrToThis = 0
 
 	// For the type structures linked into the binary, the
@@ -1680,6 +1674,9 @@ func haveIdenticalUnderlyingType(T, V *rtype, cmpTags bool) bool {
 		if len(t.fields) != len(v.fields) {
 			return false
 		}
+		if t.pkgPath.name() != v.pkgPath.name() {
+			return false
+		}
 		for i := range t.fields {
 			tf := &t.fields[i]
 			vf := &v.fields[i]
@@ -1694,19 +1691,6 @@ func haveIdenticalUnderlyingType(T, V *rtype, cmpTags bool) bool {
 			}
 			if tf.offsetAnon != vf.offsetAnon {
 				return false
-			}
-			if !tf.name.isExported() {
-				tp := tf.name.pkgPath()
-				if tp == "" {
-					tp = t.pkgPath.name()
-				}
-				vp := vf.name.pkgPath()
-				if vp == "" {
-					vp = v.pkgPath.name()
-				}
-				if tp != vp {
-					return false
-				}
 			}
 		}
 		return true
@@ -1849,7 +1833,7 @@ func ChanOf(dir ChanDir, t Type) Type {
 	ch := *prototype
 	ch.tflag = 0
 	ch.dir = uintptr(dir)
-	ch.str = resolveReflectName(newName(s, "", "", false))
+	ch.str = resolveReflectName(newName(s, "", false))
 	ch.hash = fnv1(typ.hash, 'c', byte(dir))
 	ch.elem = typ
 
@@ -1892,7 +1876,7 @@ func MapOf(key, elem Type) Type {
 	// Make a map type.
 	var imap interface{} = (map[unsafe.Pointer]unsafe.Pointer)(nil)
 	mt := **(**mapType)(unsafe.Pointer(&imap))
-	mt.str = resolveReflectName(newName(s, "", "", false))
+	mt.str = resolveReflectName(newName(s, "", false))
 	mt.tflag = 0
 	mt.hash = fnv1(etyp.hash, 'm', byte(ktyp.hash>>24), byte(ktyp.hash>>16), byte(ktyp.hash>>8), byte(ktyp.hash))
 	mt.key = ktyp
@@ -2060,7 +2044,7 @@ func FuncOf(in, out []Type, variadic bool) Type {
 	}
 
 	// Populate the remaining fields of ft and store in cache.
-	ft.str = resolveReflectName(newName(str, "", "", false))
+	ft.str = resolveReflectName(newName(str, "", false))
 	ft.ptrToThis = 0
 	return addToCache(&ft.rtype)
 }
@@ -2255,7 +2239,7 @@ func bucketOf(ktyp, etyp *rtype) *rtype {
 		b.align = 8
 	}
 	s := "bucket(" + ktyp.String() + "," + etyp.String() + ")"
-	b.str = resolveReflectName(newName(s, "", "", false))
+	b.str = resolveReflectName(newName(s, "", false))
 	return b
 }
 
@@ -2285,7 +2269,7 @@ func SliceOf(t Type) Type {
 	prototype := *(**sliceType)(unsafe.Pointer(&islice))
 	slice := *prototype
 	slice.tflag = 0
-	slice.str = resolveReflectName(newName(s, "", "", false))
+	slice.str = resolveReflectName(newName(s, "", false))
 	slice.hash = fnv1(typ.hash, '[')
 	slice.elem = typ
 	slice.ptrToThis = 0
@@ -2434,7 +2418,7 @@ func StructOf(fields []StructField) Type {
 				ift := (*interfaceType)(unsafe.Pointer(ft))
 				for im, m := range ift.methods {
 					if ift.nameOff(m.name).pkgPath() != "" {
-						// TODO(sbinet)
+						// TODO(sbinet).  Issue 15924.
 						panic("reflect: embedded interface with unexported method(s) not implemented")
 					}
 
@@ -2492,10 +2476,15 @@ func StructOf(fields []StructField) Type {
 			case Ptr:
 				ptr := (*ptrType)(unsafe.Pointer(ft))
 				if unt := ptr.uncommon(); unt != nil {
+					if i > 0 && unt.mcount > 0 {
+						// Issue 15924.
+						panic("reflect: embedded type with methods not implemented if type is not first field")
+					}
 					for _, m := range unt.methods() {
 						mname := ptr.nameOff(m.name)
 						if mname.pkgPath() != "" {
-							// TODO(sbinet)
+							// TODO(sbinet).
+							// Issue 15924.
 							panic("reflect: embedded interface with unexported method(s) not implemented")
 						}
 						methods = append(methods, method{
@@ -2511,6 +2500,7 @@ func StructOf(fields []StructField) Type {
 						mname := ptr.nameOff(m.name)
 						if mname.pkgPath() != "" {
 							// TODO(sbinet)
+							// Issue 15924.
 							panic("reflect: embedded interface with unexported method(s) not implemented")
 						}
 						methods = append(methods, method{
@@ -2523,10 +2513,15 @@ func StructOf(fields []StructField) Type {
 				}
 			default:
 				if unt := ft.uncommon(); unt != nil {
+					if i > 0 && unt.mcount > 0 {
+						// Issue 15924.
+						panic("reflect: embedded type with methods not implemented if type is not first field")
+					}
 					for _, m := range unt.methods() {
 						mname := ft.nameOff(m.name)
 						if mname.pkgPath() != "" {
 							// TODO(sbinet)
+							// Issue 15924.
 							panic("reflect: embedded interface with unexported method(s) not implemented")
 						}
 						methods = append(methods, method{
@@ -2673,7 +2668,7 @@ func StructOf(fields []StructField) Type {
 		}
 	}
 
-	typ.str = resolveReflectName(newName(str, "", "", false))
+	typ.str = resolveReflectName(newName(str, "", false))
 	typ.tflag = 0
 	typ.hash = hash
 	typ.size = size
@@ -2802,7 +2797,7 @@ func runtimeStructField(field StructField) structField {
 
 	resolveReflectType(field.Type.common()) // install in runtime
 	return structField{
-		name:       newName(field.Name, string(field.Tag), "", true),
+		name:       newName(field.Name, string(field.Tag), true),
 		typ:        field.Type.common(),
 		offsetAnon: offsetAnon,
 	}
@@ -2866,7 +2861,7 @@ func ArrayOf(count int, elem Type) Type {
 	prototype := *(**arrayType)(unsafe.Pointer(&iarray))
 	array := *prototype
 	array.tflag = 0
-	array.str = resolveReflectName(newName(s, "", "", false))
+	array.str = resolveReflectName(newName(s, "", false))
 	array.hash = fnv1(typ.hash, '[')
 	for n := uint32(count); n > 0; n >>= 8 {
 		array.hash = fnv1(array.hash, byte(n))
@@ -3119,7 +3114,7 @@ func funcLayout(t *rtype, rcvr *rtype) (frametype *rtype, argSize, retOffset uin
 	} else {
 		s = "funcargs(" + t.String() + ")"
 	}
-	x.str = resolveReflectName(newName(s, "", "", false))
+	x.str = resolveReflectName(newName(s, "", false))
 
 	// cache result for future callers
 	framePool = &sync.Pool{New: func() interface{} {

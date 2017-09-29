@@ -14,7 +14,10 @@ import (
 	"unicode/utf8"
 )
 
-// TODO(adg): support zip file comments
+var (
+	errLongName  = errors.New("zip: FileHeader.Name too long")
+	errLongExtra = errors.New("zip: FileHeader.Extra too long")
+)
 
 // Writer implements a zip file writer.
 type Writer struct {
@@ -27,6 +30,9 @@ type Writer struct {
 	// testHookCloseSizeOffset if non-nil is called with the size
 	// of offset of the central directory at Close.
 	testHookCloseSizeOffset func(size, offset uint64)
+
+	// Comment is the central directory comment and must be set before Close is called.
+	Comment string
 }
 
 type header struct {
@@ -59,6 +65,10 @@ func (w *Writer) Flush() error {
 // Close finishes writing the zip file by writing the central directory.
 // It does not (and cannot) close the underlying writer.
 func (w *Writer) Close() error {
+	if len(w.Comment) > uint16max {
+		return errors.New("zip: Writer.Comment too long")
+	}
+
 	if w.last != nil && !w.last.closed {
 		if err := w.last.close(); err != nil {
 			return err
@@ -174,13 +184,16 @@ func (w *Writer) Close() error {
 	var buf [directoryEndLen]byte
 	b := writeBuf(buf[:])
 	b.uint32(uint32(directoryEndSignature))
-	b = b[4:]                 // skip over disk number and first disk number (2x uint16)
-	b.uint16(uint16(records)) // number of entries this disk
-	b.uint16(uint16(records)) // number of entries total
-	b.uint32(uint32(size))    // size of directory
-	b.uint32(uint32(offset))  // start of directory
-	// skipped size of comment (always zero)
+	b = b[4:]                        // skip over disk number and first disk number (2x uint16)
+	b.uint16(uint16(records))        // number of entries this disk
+	b.uint16(uint16(records))        // number of entries total
+	b.uint32(uint32(size))           // size of directory
+	b.uint32(uint32(offset))         // start of directory
+	b.uint16(uint16(len(w.Comment))) // byte size of EOCD comment
 	if _, err := w.cw.Write(buf[:]); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w.cw, w.Comment); err != nil {
 		return err
 	}
 
@@ -275,6 +288,14 @@ func (w *Writer) CreateHeader(fh *FileHeader) (io.Writer, error) {
 }
 
 func writeHeader(w io.Writer, h *FileHeader) error {
+	const maxUint16 = 1<<16 - 1
+	if len(h.Name) > maxUint16 {
+		return errLongName
+	}
+	if len(h.Extra) > maxUint16 {
+		return errLongExtra
+	}
+
 	var buf [fileHeaderLen]byte
 	b := writeBuf(buf[:])
 	b.uint32(uint32(fileHeaderSignature))

@@ -380,7 +380,7 @@ func casebody(sw *Node, typeswvar *Node) {
 	var def *Node    // defaults
 	br := nod(OBREAK, nil, nil)
 
-	for i, n := range sw.List.Slice() {
+	for _, n := range sw.List.Slice() {
 		setlineno(n)
 		if n.Op != OXCASE {
 			Fatalf("casebody %v", n.Op)
@@ -474,21 +474,7 @@ func casebody(sw *Node, typeswvar *Node) {
 			fallIndex--
 		}
 		last := stat[fallIndex]
-
-		// botch - shouldn't fall through declaration
-		if last.Xoffset == n.Xoffset && last.Op == OXFALL {
-			if typeswvar != nil {
-				setlineno(last)
-				yyerror("cannot fallthrough in type switch")
-			}
-
-			if i+1 >= sw.List.Len() {
-				setlineno(last)
-				yyerror("cannot fallthrough final case in switch")
-			}
-
-			last.Op = OFALL
-		} else {
+		if last.Op != OFALL {
 			stat = append(stat, br)
 		}
 	}
@@ -624,6 +610,11 @@ func checkDupExprCases(exprname *Node, clauses []*Node) {
 				if ct := consttype(n); ct < 0 || ct == CTBOOL {
 					continue
 				}
+				// If the value has no type, we have
+				// already printed an error about it.
+				if n.Type == nil {
+					continue
+				}
 
 				val := n.Val().Interface()
 				prev, dup := seen[val]
@@ -647,6 +638,11 @@ func checkDupExprCases(exprname *Node, clauses []*Node) {
 	for _, ncase := range clauses {
 		for _, n := range ncase.List.Slice() {
 			if ct := consttype(n); ct < 0 || ct == CTBOOL {
+				continue
+			}
+			// If the value has no type, we have
+			// already printed an error about it.
+			if n.Type == nil {
 				continue
 			}
 			tv := typeVal{
@@ -757,7 +753,7 @@ func (s *typeSwitch) walk(sw *Node) {
 	if cond.Right.Type.IsEmptyInterface() {
 		h.Xoffset = int64(2 * Widthptr) // offset of hash in runtime._type
 	} else {
-		h.Xoffset = int64(3 * Widthptr) // offset of hash in runtime.itab
+		h.Xoffset = int64(2 * Widthptr) // offset of hash in runtime.itab
 	}
 	h.SetBounded(true) // guaranteed not to fault
 	a = nod(OAS, s.hashname, h)

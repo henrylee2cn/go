@@ -42,12 +42,30 @@ func httpTrace(w http.ResponseWriter, r *http.Request) {
 // See https://github.com/catapult-project/catapult/blob/master/tracing/docs/embedding-trace-viewer.md
 // This is almost verbatim copy of:
 // https://github.com/catapult-project/catapult/blob/master/tracing/bin/index.html
-// on revision 623a005a3ffa9de13c4b92bc72290e7bcd1ca591.
+// on revision 5f9e4c3eaa555bdef18218a89f38c768303b7b6e.
 var templTrace = `
 <html>
 <head>
 <link href="/trace_viewer_html" rel="import">
+<style type="text/css">
+  html, body {
+    box-sizing: border-box;
+    overflow: hidden;
+    margin: 0px;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+  }
+  #trace-viewer {
+    width: 100%;
+    height: 100%;
+  }
+  #trace-viewer:focus {
+    outline: none;
+  }
+</style>
 <script>
+'use strict';
 (function() {
   var viewer;
   var url;
@@ -84,7 +102,9 @@ var templTrace = `
 
   function onResult(result) {
     model = new tr.Model();
-    var i = new tr.importer.Import(model);
+    var opts = new tr.importer.ImportOptions();
+    opts.shiftWorldToZero = false;
+    var i = new tr.importer.Import(model, opts);
     var p = i.importTracesWithProgressDialog([result]);
     p.then(onModelLoaded, onImportFail);
   }
@@ -127,7 +147,7 @@ var templTrace = `
 // httpTraceViewerHTML serves static part of trace-viewer.
 // This URL is queried from templTrace HTML.
 func httpTraceViewerHTML(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, filepath.Join(runtime.GOROOT(), "misc", "trace", "trace_viewer_lean.html"))
+	http.ServeFile(w, r, filepath.Join(runtime.GOROOT(), "misc", "trace", "trace_viewer_full.html"))
 }
 
 // httpJsonTrace serves json trace, requested from within templTrace HTML.
@@ -429,9 +449,6 @@ func generateTrace(params *traceParams) (ViewerData, error) {
 		if setGStateErr != nil {
 			return ctx.data, setGStateErr
 		}
-		if ctx.gstates[gRunnable] < 0 || ctx.gstates[gRunning] < 0 || ctx.threadStats.insyscall < 0 {
-			return ctx.data, fmt.Errorf("invalid state after processing %v: runnable=%d running=%d insyscall=%d", ev, ctx.gstates[gRunnable], ctx.gstates[gRunning], ctx.threadStats.insyscall)
-		}
 
 		// Ignore events that are from uninteresting goroutines
 		// or outside of the interesting timeframe.
@@ -461,12 +478,12 @@ func generateTrace(params *traceParams) (ViewerData, error) {
 		case trace.EvGCStart:
 			ctx.emitSlice(ev, "GC")
 		case trace.EvGCDone:
-		case trace.EvGCScanStart:
+		case trace.EvGCSTWStart:
 			if ctx.gtrace {
 				continue
 			}
-			ctx.emitSlice(ev, "MARK TERMINATION")
-		case trace.EvGCScanDone:
+			ctx.emitSlice(ev, fmt.Sprintf("STW (%s)", ev.SArgs[0]))
+		case trace.EvGCSTWDone:
 		case trace.EvGCMarkAssistStart:
 			// Mark assists can continue past preemptions, so truncate to the
 			// whichever comes first. We'll synthesize another slice if

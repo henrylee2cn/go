@@ -186,6 +186,11 @@ func Getfsstat(buf []Statfs_t, flags int) (n int, err error) {
 	return
 }
 
+func utimensat(dirfd int, path string, times *[2]Timespec, flag int) error {
+	// Darwin doesn't support SYS_UTIMENSAT
+	return ENOSYS
+}
+
 /*
  * Wrapped
  */
@@ -208,7 +213,6 @@ func Kill(pid int, signum Signal) (err error) { return kill(pid, int(signum), 1)
 //sys	Dup(fd int) (nfd int, err error)
 //sys	Dup2(from int, to int) (err error)
 //sys	Exchangedata(path1 string, path2 string, options int) (err error)
-//sys	Exit(code int)
 //sys	Fchdir(fd int) (err error)
 //sys	Fchflags(fd int, flags int) (err error)
 //sys	Fchmod(fd int, mode uint32) (err error)

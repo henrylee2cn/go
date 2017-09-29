@@ -596,6 +596,35 @@ func TestIgnoreBogusMapHint(t *testing.T) {
 	}
 }
 
+func TestMapBuckets(t *testing.T) {
+	// Test that maps of different sizes have the right number of buckets.
+	// These tests depend on bucketCnt and loadFactor* in hashmap.go.
+	for _, tt := range [...]struct {
+		n, b int
+	}{
+		{8, 1},
+		{9, 2},
+		{13, 2},
+		{14, 4},
+		{26, 4},
+	} {
+		m := map[int]int{}
+		for i := 0; i < tt.n; i++ {
+			m[i] = i
+		}
+		if got := runtime.MapBuckets(m); got != tt.b {
+			t.Errorf("no hint n=%d want %d buckets, got %d", tt.n, tt.b, got)
+		}
+		m = make(map[int]int, tt.n)
+		for i := 0; i < tt.n; i++ {
+			m[i] = i
+		}
+		if got := runtime.MapBuckets(m); got != tt.b {
+			t.Errorf("hint n=%d want %d buckets, got %d", tt.n, tt.b, got)
+		}
+	}
+}
+
 func benchmarkMapPop(b *testing.B, n int) {
 	m := map[int]int{}
 	for i := 0; i < b.N; i++ {
@@ -617,14 +646,38 @@ func BenchmarkMapPop100(b *testing.B)   { benchmarkMapPop(b, 100) }
 func BenchmarkMapPop1000(b *testing.B)  { benchmarkMapPop(b, 1000) }
 func BenchmarkMapPop10000(b *testing.B) { benchmarkMapPop(b, 10000) }
 
+var testNonEscapingMapVariable int = 8
+
 func TestNonEscapingMap(t *testing.T) {
 	n := testing.AllocsPerRun(1000, func() {
+		m := map[int]int{}
+		m[0] = 0
+	})
+	if n != 0 {
+		t.Fatalf("mapliteral: want 0 allocs, got %v", n)
+	}
+	n = testing.AllocsPerRun(1000, func() {
 		m := make(map[int]int)
 		m[0] = 0
 	})
 	if n != 0 {
-		t.Fatalf("want 0 allocs, got %v", n)
+		t.Fatalf("no hint: want 0 allocs, got %v", n)
 	}
+	n = testing.AllocsPerRun(1000, func() {
+		m := make(map[int]int, 8)
+		m[0] = 0
+	})
+	if n != 0 {
+		t.Fatalf("with small hint: want 0 allocs, got %v", n)
+	}
+	n = testing.AllocsPerRun(1000, func() {
+		m := make(map[int]int, testNonEscapingMapVariable)
+		m[0] = 0
+	})
+	if n != 0 {
+		t.Fatalf("with variable hint: want 0 allocs, got %v", n)
+	}
+
 }
 
 func benchmarkMapAssignInt32(b *testing.B, n int) {
@@ -635,7 +688,7 @@ func benchmarkMapAssignInt32(b *testing.B, n int) {
 }
 
 func benchmarkMapDeleteInt32(b *testing.B, n int) {
-	a := make(map[int32]int)
+	a := make(map[int32]int, n*b.N)
 	for i := 0; i < n*b.N; i++ {
 		a[int32(i)] = i
 	}
@@ -653,7 +706,7 @@ func benchmarkMapAssignInt64(b *testing.B, n int) {
 }
 
 func benchmarkMapDeleteInt64(b *testing.B, n int) {
-	a := make(map[int64]int)
+	a := make(map[int64]int, n*b.N)
 	for i := 0; i < n*b.N; i++ {
 		a[int64(i)] = i
 	}
@@ -680,7 +733,7 @@ func benchmarkMapDeleteStr(b *testing.B, n int) {
 	for i := 0; i < n*b.N; i++ {
 		k[i] = strconv.Itoa(i)
 	}
-	a := make(map[string]int)
+	a := make(map[string]int, n*b.N)
 	for i := 0; i < n*b.N; i++ {
 		a[k[i]] = i
 	}

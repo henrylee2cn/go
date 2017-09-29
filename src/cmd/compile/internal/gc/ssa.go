@@ -37,6 +37,7 @@ func initssaconfig() {
 		Float32:    types.Types[TFLOAT32],
 		Float64:    types.Types[TFLOAT64],
 		Int:        types.Types[TINT],
+		UInt:       types.Types[TUINT],
 		Uintptr:    types.Types[TUINTPTR],
 		String:     types.Types[TSTRING],
 		BytePtr:    types.NewPtr(types.Types[TUINT8]),
@@ -70,28 +71,32 @@ func initssaconfig() {
 	ssaCaches = make([]ssa.Cache, nBackendWorkers)
 
 	// Set up some runtime functions we'll need to call.
-	Newproc = Sysfunc("newproc")
-	Deferproc = Sysfunc("deferproc")
-	Deferreturn = Sysfunc("deferreturn")
-	Duffcopy = Sysfunc("duffcopy")
-	Duffzero = Sysfunc("duffzero")
-	panicindex = Sysfunc("panicindex")
-	panicslice = Sysfunc("panicslice")
-	panicdivide = Sysfunc("panicdivide")
-	growslice = Sysfunc("growslice")
-	panicdottypeE = Sysfunc("panicdottypeE")
-	panicdottypeI = Sysfunc("panicdottypeI")
-	panicnildottype = Sysfunc("panicnildottype")
-	assertE2I = Sysfunc("assertE2I")
-	assertE2I2 = Sysfunc("assertE2I2")
-	assertI2I = Sysfunc("assertI2I")
-	assertI2I2 = Sysfunc("assertI2I2")
-	goschedguarded = Sysfunc("goschedguarded")
-	writeBarrier = Sysfunc("writeBarrier")
-	writebarrierptr = Sysfunc("writebarrierptr")
-	typedmemmove = Sysfunc("typedmemmove")
-	typedmemclr = Sysfunc("typedmemclr")
-	Udiv = Sysfunc("udiv")
+	Newproc = sysfunc("newproc")
+	Deferproc = sysfunc("deferproc")
+	Deferreturn = sysfunc("deferreturn")
+	Duffcopy = sysfunc("duffcopy")
+	Duffzero = sysfunc("duffzero")
+	panicindex = sysfunc("panicindex")
+	panicslice = sysfunc("panicslice")
+	panicdivide = sysfunc("panicdivide")
+	growslice = sysfunc("growslice")
+	panicdottypeE = sysfunc("panicdottypeE")
+	panicdottypeI = sysfunc("panicdottypeI")
+	panicnildottype = sysfunc("panicnildottype")
+	assertE2I = sysfunc("assertE2I")
+	assertE2I2 = sysfunc("assertE2I2")
+	assertI2I = sysfunc("assertI2I")
+	assertI2I2 = sysfunc("assertI2I2")
+	goschedguarded = sysfunc("goschedguarded")
+	writeBarrier = sysfunc("writeBarrier")
+	writebarrierptr = sysfunc("writebarrierptr")
+	typedmemmove = sysfunc("typedmemmove")
+	typedmemclr = sysfunc("typedmemclr")
+	Udiv = sysfunc("udiv")
+
+	// GO386=387 runtime functions
+	ControlWord64trunc = sysfunc("controlWord64trunc")
+	ControlWord32 = sysfunc("controlWord32")
 }
 
 // buildssa builds an SSA function for fn.
@@ -158,15 +163,12 @@ func buildssa(fn *Node, worker int) *ssa.Func {
 	s.startBlock(s.f.Entry)
 	s.vars[&memVar] = s.startmem
 
-	s.varsyms = map[*Node]interface{}{}
-
 	// Generate addresses of local declarations
 	s.decladdrs = map[*Node]*ssa.Value{}
 	for _, n := range fn.Func.Dcl {
 		switch n.Class() {
 		case PPARAM, PPARAMOUT:
-			aux := s.lookupSymbol(n, &ssa.ArgSymbol{Node: n})
-			s.decladdrs[n] = s.entryNewValue1A(ssa.OpAddr, types.NewPtr(n.Type), aux, s.sp)
+			s.decladdrs[n] = s.entryNewValue1A(ssa.OpAddr, types.NewPtr(n.Type), n, s.sp)
 			if n.Class() == PPARAMOUT && s.canSSA(n) {
 				// Save ssa-able PPARAMOUT variables so we can
 				// store them back to the stack at the end of
@@ -253,9 +255,6 @@ type state struct {
 
 	// addresses of PPARAM and PPARAMOUT variables.
 	decladdrs map[*Node]*ssa.Value
-
-	// symbols for PEXTERN, PAUTO and PPARAMOUT variables so they can be reused.
-	varsyms map[*Node]interface{}
 
 	// starting values. Memory, stack pointer, and globals pointer
 	startmem *ssa.Value
@@ -657,24 +656,26 @@ func (s *state) stmt(n *Node) {
 				}
 				rhs = nil
 			case OAPPEND:
-				// If we're writing the result of an append back to the same slice,
-				// handle it specially to avoid write barriers on the fast (non-growth) path.
+				// Check whether we're writing the result of an append back to the same slice.
+				// If so, we handle it specially to avoid write barriers on the fast
+				// (non-growth) path.
+				if !samesafeexpr(n.Left, rhs.List.First()) {
+					break
+				}
 				// If the slice can be SSA'd, it'll be on the stack,
 				// so there will be no write barriers,
 				// so there's no need to attempt to prevent them.
-				if samesafeexpr(n.Left, rhs.List.First()) {
-					if !s.canSSA(n.Left) {
-						if Debug_append > 0 {
-							Warnl(n.Pos, "append: len-only update")
-						}
-						s.append(rhs, true)
-						return
-					} else {
-						if Debug_append > 0 { // replicating old diagnostic message
-							Warnl(n.Pos, "append: len-only update (in local slice)")
-						}
+				if s.canSSA(n.Left) {
+					if Debug_append > 0 { // replicating old diagnostic message
+						Warnl(n.Pos, "append: len-only update (in local slice)")
 					}
+					break
 				}
+				if Debug_append > 0 {
+					Warnl(n.Pos, "append: len-only update")
+				}
+				s.append(rhs, true)
+				return
 			}
 		}
 
@@ -929,6 +930,11 @@ func (s *state) stmt(n *Node) {
 		// Insert a varlive op to record that a variable is still live.
 		if !n.Left.Addrtaken() {
 			s.Fatalf("VARLIVE variable %v must have Addrtaken set", n.Left)
+		}
+		switch n.Left.Class() {
+		case PAUTO, PPARAM, PPARAMOUT:
+		default:
+			s.Fatalf("VARLIVE variable %v must be Auto or Arg", n.Left)
 		}
 		s.vars[&memVar] = s.newValue1A(ssa.OpVarLive, types.TypeMem, n.Left, s.mem())
 
@@ -1404,14 +1410,13 @@ func (s *state) expr(n *Node) *ssa.Value {
 		len := s.newValue1(ssa.OpStringLen, types.Types[TINT], str)
 		return s.newValue3(ssa.OpSliceMake, n.Type, ptr, len, len)
 	case OCFUNC:
-		aux := s.lookupSymbol(n, &ssa.ExternSymbol{Sym: n.Left.Sym.Linksym()})
+		aux := n.Left.Sym.Linksym()
 		return s.entryNewValue1A(ssa.OpAddr, n.Type, aux, s.sb)
 	case ONAME:
 		if n.Class() == PFUNC {
 			// "value" of a function is the address of the function's closure
 			sym := funcsym(n.Sym).Linksym()
-			aux := s.lookupSymbol(n, &ssa.ExternSymbol{Sym: sym})
-			return s.entryNewValue1A(ssa.OpAddr, types.NewPtr(n.Type), aux, s.sb)
+			return s.entryNewValue1A(ssa.OpAddr, types.NewPtr(n.Type), sym, s.sb)
 		}
 		if s.canSSA(n) {
 			return s.variable(n, n.Type)
@@ -2187,7 +2192,7 @@ func (s *state) append(n *Node, inplace bool) *ssa.Value {
 	r := s.rtcall(growslice, true, []*types.Type{pt, types.Types[TINT], types.Types[TINT]}, taddr, p, l, c, nl)
 
 	if inplace {
-		if sn.Op == ONAME {
+		if sn.Op == ONAME && sn.Class() != PEXTERN {
 			// Tell liveness we're about to build a new slice
 			s.vars[&memVar] = s.newValue1A(ssa.OpVarDef, types.TypeMem, sn, s.mem())
 		}
@@ -2394,7 +2399,7 @@ func (s *state) assign(left *Node, right *ssa.Value, deref bool, skip skipMask) 
 	}
 	// Left is not ssa-able. Compute its address.
 	addr := s.addr(left, false)
-	if left.Op == ONAME && skip == 0 {
+	if left.Op == ONAME && left.Class() != PEXTERN && skip == 0 {
 		s.vars[&memVar] = s.newValue1A(ssa.OpVarDef, types.TypeMem, left, s.mem())
 	}
 	if isReflectHeaderDataField(left) {
@@ -2573,6 +2578,16 @@ func init() {
 			return nil
 		},
 		all...)
+	add("runtime", "getclosureptr",
+		func(s *state, n *Node, args []*ssa.Value) *ssa.Value {
+			return s.newValue0(ssa.OpGetClosurePtr, s.f.Config.Types.Uintptr)
+		},
+		all...)
+
+	addF("runtime", "getcallerpc",
+		func(s *state, n *Node, args []*ssa.Value) *ssa.Value {
+			return s.newValue0(ssa.OpGetCallerPC, s.f.Config.Types.Uintptr)
+		}, sys.AMD64, sys.I386)
 
 	/******** runtime/internal/sys ********/
 	addF("runtime/internal/sys", "Ctz32",
@@ -2604,7 +2619,6 @@ func init() {
 			return s.newValue1(ssa.OpSelect0, types.Types[TUINT32], v)
 		},
 		sys.AMD64, sys.ARM64, sys.S390X, sys.MIPS, sys.PPC64)
-
 	addF("runtime/internal/atomic", "Load64",
 		func(s *state, n *Node, args []*ssa.Value) *ssa.Value {
 			v := s.newValue2(ssa.OpAtomicLoad64, types.NewTuple(types.Types[TUINT64], types.TypeMem), args[0], s.mem())
@@ -2720,6 +2734,26 @@ func init() {
 			return s.newValue1(ssa.OpSqrt, types.Types[TFLOAT64], args[0])
 		},
 		sys.AMD64, sys.ARM, sys.ARM64, sys.MIPS, sys.PPC64, sys.S390X)
+	addF("math", "Trunc",
+		func(s *state, n *Node, args []*ssa.Value) *ssa.Value {
+			return s.newValue1(ssa.OpTrunc, types.Types[TFLOAT64], args[0])
+		},
+		sys.PPC64, sys.S390X)
+	addF("math", "Ceil",
+		func(s *state, n *Node, args []*ssa.Value) *ssa.Value {
+			return s.newValue1(ssa.OpCeil, types.Types[TFLOAT64], args[0])
+		},
+		sys.PPC64, sys.S390X)
+	addF("math", "Floor",
+		func(s *state, n *Node, args []*ssa.Value) *ssa.Value {
+			return s.newValue1(ssa.OpFloor, types.Types[TFLOAT64], args[0])
+		},
+		sys.PPC64, sys.S390X)
+	addF("math", "Round",
+		func(s *state, n *Node, args []*ssa.Value) *ssa.Value {
+			return s.newValue1(ssa.OpRound, types.Types[TFLOAT64], args[0])
+		},
+		sys.S390X)
 
 	/******** math/bits ********/
 	addF("math/bits", "TrailingZeros64",
@@ -2843,7 +2877,7 @@ func init() {
 		sys.ARM64)
 	makeOnesCountAMD64 := func(op64 ssa.Op, op32 ssa.Op) func(s *state, n *Node, args []*ssa.Value) *ssa.Value {
 		return func(s *state, n *Node, args []*ssa.Value) *ssa.Value {
-			aux := s.lookupSymbol(n, &ssa.ExternSymbol{Sym: syslook("support_popcnt").Sym.Linksym()})
+			aux := syslook("support_popcnt").Sym.Linksym()
 			addr := s.entryNewValue1A(ssa.OpAddr, types.Types[TBOOL].PtrTo(), aux, s.sb)
 			v := s.newValue2(ssa.OpLoad, types.Types[TBOOL], addr, s.mem())
 			b := s.endBlock()
@@ -3098,7 +3132,7 @@ func (s *state) call(n *Node, k callKind) *ssa.Value {
 		if k != callNormal {
 			s.nilCheck(itab)
 		}
-		itabidx := fn.Xoffset + 3*int64(Widthptr) + 8 // offset of fun field in runtime.itab
+		itabidx := fn.Xoffset + 2*int64(Widthptr) + 8 // offset of fun field in runtime.itab
 		itab = s.newValue1I(ssa.OpOffPtr, s.f.Config.Types.UintptrPtr, itabidx, itab)
 		if k == callNormal {
 			codeptr = s.newValue2(ssa.OpLoad, types.Types[TUINTPTR], itab, s.mem())
@@ -3195,24 +3229,6 @@ func etypesign(e types.EType) int8 {
 	return 0
 }
 
-// lookupSymbol is used to retrieve the symbol (Extern, Arg or Auto) used for a particular node.
-// This improves the effectiveness of cse by using the same Aux values for the
-// same symbols.
-func (s *state) lookupSymbol(n *Node, sym interface{}) interface{} {
-	switch sym.(type) {
-	default:
-		s.Fatalf("sym %v is of unknown type %T", sym, sym)
-	case *ssa.ExternSymbol, *ssa.ArgSymbol, *ssa.AutoSymbol:
-		// these are the only valid types
-	}
-
-	if lsym, ok := s.varsyms[n]; ok {
-		return lsym
-	}
-	s.varsyms[n] = sym
-	return sym
-}
-
 // addr converts the address of the expression n to SSA, adds it to s and returns the SSA result.
 // The value that the returned Value represents is guaranteed to be non-nil.
 // If bounded is true then this address does not require a nil check for its operand
@@ -3224,8 +3240,7 @@ func (s *state) addr(n *Node, bounded bool) *ssa.Value {
 		switch n.Class() {
 		case PEXTERN:
 			// global variable
-			aux := s.lookupSymbol(n, &ssa.ExternSymbol{Sym: n.Sym.Linksym()})
-			v := s.entryNewValue1A(ssa.OpAddr, t, aux, s.sb)
+			v := s.entryNewValue1A(ssa.OpAddr, t, n.Sym.Linksym(), s.sb)
 			// TODO: Make OpAddr use AuxInt as well as Aux.
 			if n.Xoffset != 0 {
 				v = s.entryNewValue1I(ssa.OpOffPtr, v.Type, n.Xoffset, v)
@@ -3239,19 +3254,16 @@ func (s *state) addr(n *Node, bounded bool) *ssa.Value {
 			}
 			if n == nodfp {
 				// Special arg that points to the frame pointer (Used by ORECOVER).
-				aux := s.lookupSymbol(n, &ssa.ArgSymbol{Node: n})
-				return s.entryNewValue1A(ssa.OpAddr, t, aux, s.sp)
+				return s.entryNewValue1A(ssa.OpAddr, t, n, s.sp)
 			}
 			s.Fatalf("addr of undeclared ONAME %v. declared: %v", n, s.decladdrs)
 			return nil
 		case PAUTO:
-			aux := s.lookupSymbol(n, &ssa.AutoSymbol{Node: n})
-			return s.newValue1A(ssa.OpAddr, t, aux, s.sp)
+			return s.newValue1A(ssa.OpAddr, t, n, s.sp)
 		case PPARAMOUT: // Same as PAUTO -- cannot generate LEA early.
 			// ensure that we reuse symbols for out parameters so
 			// that cse works on their addresses
-			aux := s.lookupSymbol(n, &ssa.ArgSymbol{Node: n})
-			return s.newValue1A(ssa.OpAddr, t, aux, s.sp)
+			return s.newValue1A(ssa.OpAddr, t, n, s.sp)
 		default:
 			s.Fatalf("variable address class %v not implemented", classnames[n.Class()])
 			return nil
@@ -3338,7 +3350,7 @@ func (s *state) canSSA(n *Node) bool {
 		return false
 	case PPARAMOUT:
 		if s.hasdefer {
-			// TODO: handle this case?  Named return values must be
+			// TODO: handle this case? Named return values must be
 			// in memory so that the deferred function can see them.
 			// Maybe do: if !strings.HasPrefix(n.String(), "~") { return false }
 			// Or maybe not, see issue 18860.  Even unnamed return values
@@ -3739,7 +3751,7 @@ type u642fcvtTab struct {
 	one                           func(*state, *types.Type, int64) *ssa.Value
 }
 
-var u64_f64 u642fcvtTab = u642fcvtTab{
+var u64_f64 = u642fcvtTab{
 	geq:   ssa.OpGeq64,
 	cvt2F: ssa.OpCvt64to64F,
 	and:   ssa.OpAnd64,
@@ -3749,7 +3761,7 @@ var u64_f64 u642fcvtTab = u642fcvtTab{
 	one:   (*state).constInt64,
 }
 
-var u64_f32 u642fcvtTab = u642fcvtTab{
+var u64_f32 = u642fcvtTab{
 	geq:   ssa.OpGeq64,
 	cvt2F: ssa.OpCvt64to32F,
 	and:   ssa.OpAnd64,
@@ -3830,12 +3842,12 @@ type u322fcvtTab struct {
 	cvtI2F, cvtF2F ssa.Op
 }
 
-var u32_f64 u322fcvtTab = u322fcvtTab{
+var u32_f64 = u322fcvtTab{
 	cvtI2F: ssa.OpCvt32to64F,
 	cvtF2F: ssa.OpCopy,
 }
 
-var u32_f32 u322fcvtTab = u322fcvtTab{
+var u32_f32 = u322fcvtTab{
 	cvtI2F: ssa.OpCvt32to32F,
 	cvtF2F: ssa.OpCvt64Fto32F,
 }
@@ -3944,7 +3956,7 @@ type f2uCvtTab struct {
 	cutoff               uint64
 }
 
-var f32_u64 f2uCvtTab = f2uCvtTab{
+var f32_u64 = f2uCvtTab{
 	ltf:        ssa.OpLess32F,
 	cvt2U:      ssa.OpCvt32Fto64,
 	subf:       ssa.OpSub32F,
@@ -3954,7 +3966,7 @@ var f32_u64 f2uCvtTab = f2uCvtTab{
 	cutoff:     9223372036854775808,
 }
 
-var f64_u64 f2uCvtTab = f2uCvtTab{
+var f64_u64 = f2uCvtTab{
 	ltf:        ssa.OpLess64F,
 	cvt2U:      ssa.OpCvt64Fto64,
 	subf:       ssa.OpSub64F,
@@ -3964,7 +3976,7 @@ var f64_u64 f2uCvtTab = f2uCvtTab{
 	cutoff:     9223372036854775808,
 }
 
-var f32_u32 f2uCvtTab = f2uCvtTab{
+var f32_u32 = f2uCvtTab{
 	ltf:        ssa.OpLess32F,
 	cvt2U:      ssa.OpCvt32Fto32,
 	subf:       ssa.OpSub32F,
@@ -3974,7 +3986,7 @@ var f32_u32 f2uCvtTab = f2uCvtTab{
 	cutoff:     2147483648,
 }
 
-var f64_u32 f2uCvtTab = f2uCvtTab{
+var f64_u32 = f2uCvtTab{
 	ltf:        ssa.OpLess64F,
 	cvt2U:      ssa.OpCvt64Fto32,
 	subf:       ssa.OpSub64F,
@@ -4382,14 +4394,15 @@ func genssa(f *ssa.Func, pp *Progs) {
 	// Remember where each block starts.
 	s.bstart = make([]*obj.Prog, f.NumBlocks())
 	s.pp = pp
-	var valueProgs map[*obj.Prog]*ssa.Value
-	var blockProgs map[*obj.Prog]*ssa.Block
+	var progToValue map[*obj.Prog]*ssa.Value
+	var progToBlock map[*obj.Prog]*ssa.Block
+	var valueToProg []*obj.Prog
 	var logProgs = e.log
 	if logProgs {
-		valueProgs = make(map[*obj.Prog]*ssa.Value, f.NumValues())
-		blockProgs = make(map[*obj.Prog]*ssa.Block, f.NumBlocks())
+		progToValue = make(map[*obj.Prog]*ssa.Value, f.NumValues())
+		progToBlock = make(map[*obj.Prog]*ssa.Block, f.NumBlocks())
 		f.Logf("genssa %s\n", f.Name)
-		blockProgs[s.pp.next] = f.Blocks[0]
+		progToBlock[s.pp.next] = f.Blocks[0]
 	}
 
 	if thearch.Use387 {
@@ -4398,6 +4411,11 @@ func genssa(f *ssa.Func, pp *Progs) {
 
 	s.ScratchFpMem = e.scratchFpMem
 
+	logLocationLists := Debug_locationlist != 0
+	if Ctxt.Flag_locationlists {
+		e.curfn.Func.DebugInfo = ssa.BuildFuncDebug(f, logLocationLists)
+		valueToProg = make([]*obj.Prog, f.NumValues())
+	}
 	// Emit basic blocks
 	for i, b := range f.Blocks {
 		s.bstart[b.ID] = s.pp.next
@@ -4438,15 +4456,19 @@ func genssa(f *ssa.Func, pp *Progs) {
 				}
 			case ssa.OpPhi:
 				CheckLoweredPhi(v)
-
+			case ssa.OpRegKill:
+				// nothing to do
 			default:
 				// let the backend handle it
 				thearch.SSAGenValue(&s, v)
 			}
 
+			if Ctxt.Flag_locationlists {
+				valueToProg[v.ID] = x
+			}
 			if logProgs {
 				for ; x != s.pp.next; x = x.Link {
-					valueProgs[x] = v
+					progToValue[x] = v
 				}
 			}
 		}
@@ -4464,7 +4486,42 @@ func genssa(f *ssa.Func, pp *Progs) {
 		thearch.SSAGenBlock(&s, b, next)
 		if logProgs {
 			for ; x != s.pp.next; x = x.Link {
-				blockProgs[x] = b
+				progToBlock[x] = b
+			}
+		}
+	}
+
+	if Ctxt.Flag_locationlists {
+		for i := range f.Blocks {
+			blockDebug := e.curfn.Func.DebugInfo.Blocks[i]
+			for _, locList := range blockDebug.Variables {
+				for _, loc := range locList.Locations {
+					if loc.Start == ssa.BlockStart {
+						loc.StartProg = s.bstart[f.Blocks[i].ID]
+					} else {
+						loc.StartProg = valueToProg[loc.Start.ID]
+					}
+					if loc.End == nil {
+						Fatalf("empty loc %v compiling %v", loc, f.Name)
+					}
+
+					if loc.End == ssa.BlockEnd {
+						// If this variable was live at the end of the block, it should be
+						// live over the control flow instructions. Extend it up to the
+						// beginning of the next block.
+						// If this is the last block, then there's no Prog to use for it, and
+						// EndProg is unset.
+						if i < len(f.Blocks)-1 {
+							loc.EndProg = s.bstart[f.Blocks[i+1].ID]
+						}
+					} else {
+						loc.EndProg = valueToProg[loc.End.ID]
+					}
+					if !logLocationLists {
+						loc.Start = nil
+						loc.End = nil
+					}
+				}
 			}
 		}
 	}
@@ -4477,9 +4534,9 @@ func genssa(f *ssa.Func, pp *Progs) {
 	if logProgs {
 		for p := pp.Text; p != nil; p = p.Link {
 			var s string
-			if v, ok := valueProgs[p]; ok {
+			if v, ok := progToValue[p]; ok {
 				s = v.String()
-			} else if b, ok := blockProgs[p]; ok {
+			} else if b, ok := progToBlock[p]; ok {
 				s = b.String()
 			} else {
 				s = "   " // most value and branch strings are 2-3 characters long
@@ -4497,9 +4554,9 @@ func genssa(f *ssa.Func, pp *Progs) {
 			buf.WriteString("<dl class=\"ssa-gen\">")
 			for p := pp.Text; p != nil; p = p.Link {
 				buf.WriteString("<dt class=\"ssa-prog-src\">")
-				if v, ok := valueProgs[p]; ok {
+				if v, ok := progToValue[p]; ok {
 					buf.WriteString(v.HTML())
-				} else if b, ok := blockProgs[p]; ok {
+				} else if b, ok := progToBlock[p]; ok {
 					buf.WriteString(b.HTML())
 				}
 				buf.WriteString("</dt>")
@@ -4610,10 +4667,11 @@ func AuxOffset(v *ssa.Value) (offset int64) {
 	if v.Aux == nil {
 		return 0
 	}
-	switch sym := v.Aux.(type) {
-
-	case *ssa.AutoSymbol:
-		n := sym.Node.(*Node)
+	n, ok := v.Aux.(*Node)
+	if !ok {
+		v.Fatalf("bad aux type in %s\n", v.LongString())
+	}
+	if n.Class() == PAUTO {
 		return n.Xoffset
 	}
 	return 0
@@ -4635,17 +4693,17 @@ func AddAux2(a *obj.Addr, v *ssa.Value, offset int64) {
 		return
 	}
 	// Add symbol's offset from its base register.
-	switch sym := v.Aux.(type) {
-	case *ssa.ExternSymbol:
+	switch n := v.Aux.(type) {
+	case *obj.LSym:
 		a.Name = obj.NAME_EXTERN
-		a.Sym = sym.Sym
-	case *ssa.ArgSymbol:
-		n := sym.Node.(*Node)
-		a.Name = obj.NAME_PARAM
-		a.Sym = n.Orig.Sym.Linksym()
-		a.Offset += n.Xoffset
-	case *ssa.AutoSymbol:
-		n := sym.Node.(*Node)
+		a.Sym = n
+	case *Node:
+		if n.Class() == PPARAM || n.Class() == PPARAMOUT {
+			a.Name = obj.NAME_PARAM
+			a.Sym = n.Orig.Sym.Linksym()
+			a.Offset += n.Xoffset
+			break
+		}
 		a.Name = obj.NAME_AUTO
 		a.Sym = n.Sym.Linksym()
 		a.Offset += n.Xoffset
@@ -4721,7 +4779,7 @@ func CheckLoweredPhi(v *ssa.Value) {
 	loc := f.RegAlloc[v.ID]
 	for _, a := range v.Args {
 		if aloc := f.RegAlloc[a.ID]; aloc != loc { // TODO: .Equal() instead?
-			v.Fatalf("phi arg at different location than phi: %v @ %v, but arg %v @ %v\n%s\n", v, loc, a, aloc, v.Block.Func)
+			v.Fatalf("phi arg at different location than phi: %v @ %s, but arg %v @ %s\n%s\n", v, loc, a, aloc, v.Block.Func)
 		}
 	}
 }
@@ -4860,9 +4918,8 @@ func (e *ssafn) StringData(s string) interface{} {
 		e.strings = make(map[string]interface{})
 	}
 	data := stringsym(s)
-	aux := &ssa.ExternSymbol{Sym: data}
-	e.strings[s] = aux
-	return aux
+	e.strings[s] = data
+	return data
 }
 
 func (e *ssafn) Auto(pos src.XPos, t *types.Type) ssa.GCNode {
@@ -4876,9 +4933,9 @@ func (e *ssafn) SplitString(name ssa.LocalSlot) (ssa.LocalSlot, ssa.LocalSlot) {
 	lenType := types.Types[TINT]
 	if n.Class() == PAUTO && !n.Addrtaken() {
 		// Split this string up into two separate variables.
-		p := e.namedAuto(n.Sym.Name+".ptr", ptrType, n.Pos)
-		l := e.namedAuto(n.Sym.Name+".len", lenType, n.Pos)
-		return ssa.LocalSlot{N: p, Type: ptrType, Off: 0}, ssa.LocalSlot{N: l, Type: lenType, Off: 0}
+		p := e.splitSlot(&name, ".ptr", 0, ptrType)
+		l := e.splitSlot(&name, ".len", ptrType.Size(), lenType)
+		return p, l
 	}
 	// Return the two parts of the larger variable.
 	return ssa.LocalSlot{N: n, Type: ptrType, Off: name.Off}, ssa.LocalSlot{N: n, Type: lenType, Off: name.Off + int64(Widthptr)}
@@ -4893,9 +4950,9 @@ func (e *ssafn) SplitInterface(name ssa.LocalSlot) (ssa.LocalSlot, ssa.LocalSlot
 		if n.Type.IsEmptyInterface() {
 			f = ".type"
 		}
-		c := e.namedAuto(n.Sym.Name+f, t, n.Pos)
-		d := e.namedAuto(n.Sym.Name+".data", t, n.Pos)
-		return ssa.LocalSlot{N: c, Type: t, Off: 0}, ssa.LocalSlot{N: d, Type: t, Off: 0}
+		c := e.splitSlot(&name, f, 0, t)
+		d := e.splitSlot(&name, ".data", t.Size(), t)
+		return c, d
 	}
 	// Return the two parts of the larger variable.
 	return ssa.LocalSlot{N: n, Type: t, Off: name.Off}, ssa.LocalSlot{N: n, Type: t, Off: name.Off + int64(Widthptr)}
@@ -4907,10 +4964,10 @@ func (e *ssafn) SplitSlice(name ssa.LocalSlot) (ssa.LocalSlot, ssa.LocalSlot, ss
 	lenType := types.Types[TINT]
 	if n.Class() == PAUTO && !n.Addrtaken() {
 		// Split this slice up into three separate variables.
-		p := e.namedAuto(n.Sym.Name+".ptr", ptrType, n.Pos)
-		l := e.namedAuto(n.Sym.Name+".len", lenType, n.Pos)
-		c := e.namedAuto(n.Sym.Name+".cap", lenType, n.Pos)
-		return ssa.LocalSlot{N: p, Type: ptrType, Off: 0}, ssa.LocalSlot{N: l, Type: lenType, Off: 0}, ssa.LocalSlot{N: c, Type: lenType, Off: 0}
+		p := e.splitSlot(&name, ".ptr", 0, ptrType)
+		l := e.splitSlot(&name, ".len", ptrType.Size(), lenType)
+		c := e.splitSlot(&name, ".cap", ptrType.Size()+lenType.Size(), lenType)
+		return p, l, c
 	}
 	// Return the three parts of the larger variable.
 	return ssa.LocalSlot{N: n, Type: ptrType, Off: name.Off},
@@ -4929,9 +4986,9 @@ func (e *ssafn) SplitComplex(name ssa.LocalSlot) (ssa.LocalSlot, ssa.LocalSlot) 
 	}
 	if n.Class() == PAUTO && !n.Addrtaken() {
 		// Split this complex up into two separate variables.
-		c := e.namedAuto(n.Sym.Name+".real", t, n.Pos)
-		d := e.namedAuto(n.Sym.Name+".imag", t, n.Pos)
-		return ssa.LocalSlot{N: c, Type: t, Off: 0}, ssa.LocalSlot{N: d, Type: t, Off: 0}
+		r := e.splitSlot(&name, ".real", 0, t)
+		i := e.splitSlot(&name, ".imag", t.Size(), t)
+		return r, i
 	}
 	// Return the two parts of the larger variable.
 	return ssa.LocalSlot{N: n, Type: t, Off: name.Off}, ssa.LocalSlot{N: n, Type: t, Off: name.Off + s}
@@ -4947,9 +5004,10 @@ func (e *ssafn) SplitInt64(name ssa.LocalSlot) (ssa.LocalSlot, ssa.LocalSlot) {
 	}
 	if n.Class() == PAUTO && !n.Addrtaken() {
 		// Split this int64 up into two separate variables.
-		h := e.namedAuto(n.Sym.Name+".hi", t, n.Pos)
-		l := e.namedAuto(n.Sym.Name+".lo", types.Types[TUINT32], n.Pos)
-		return ssa.LocalSlot{N: h, Type: t, Off: 0}, ssa.LocalSlot{N: l, Type: types.Types[TUINT32], Off: 0}
+		if thearch.LinkArch.ByteOrder == binary.BigEndian {
+			return e.splitSlot(&name, ".hi", 0, t), e.splitSlot(&name, ".lo", t.Size(), types.Types[TUINT32])
+		}
+		return e.splitSlot(&name, ".hi", t.Size(), t), e.splitSlot(&name, ".lo", 0, types.Types[TUINT32])
 	}
 	// Return the two parts of the larger variable.
 	if thearch.LinkArch.ByteOrder == binary.BigEndian {
@@ -4962,12 +5020,15 @@ func (e *ssafn) SplitStruct(name ssa.LocalSlot, i int) ssa.LocalSlot {
 	n := name.N.(*Node)
 	st := name.Type
 	ft := st.FieldType(i)
+	var offset int64
+	for f := 0; f < i; f++ {
+		offset += st.FieldType(f).Size()
+	}
 	if n.Class() == PAUTO && !n.Addrtaken() {
 		// Note: the _ field may appear several times.  But
 		// have no fear, identically-named but distinct Autos are
 		// ok, albeit maybe confusing for a debugger.
-		x := e.namedAuto(n.Sym.Name+"."+st.FieldName(i), ft, n.Pos)
-		return ssa.LocalSlot{N: x, Type: ft, Off: 0}
+		return e.splitSlot(&name, "."+st.FieldName(i), offset, ft)
 	}
 	return ssa.LocalSlot{N: n, Type: ft, Off: name.Off + st.FieldOff(i)}
 }
@@ -4980,8 +5041,7 @@ func (e *ssafn) SplitArray(name ssa.LocalSlot) ssa.LocalSlot {
 	}
 	et := at.ElemType()
 	if n.Class() == PAUTO && !n.Addrtaken() {
-		x := e.namedAuto(n.Sym.Name+"[0]", et, n.Pos)
-		return ssa.LocalSlot{N: x, Type: et, Off: 0}
+		return e.splitSlot(&name, "[0]", 0, et)
 	}
 	return ssa.LocalSlot{N: n, Type: et, Off: name.Off}
 }
@@ -4990,16 +5050,14 @@ func (e *ssafn) DerefItab(it *obj.LSym, offset int64) *obj.LSym {
 	return itabsym(it, offset)
 }
 
-// namedAuto returns a new AUTO variable with the given name and type.
-// These are exposed to the debugger.
-func (e *ssafn) namedAuto(name string, typ *types.Type, pos src.XPos) ssa.GCNode {
-	t := typ
-	s := &types.Sym{Name: name, Pkg: localpkg}
+// splitSlot returns a slot representing the data of parent starting at offset.
+func (e *ssafn) splitSlot(parent *ssa.LocalSlot, suffix string, offset int64, t *types.Type) ssa.LocalSlot {
+	s := &types.Sym{Name: parent.N.(*Node).Sym.Name + suffix, Pkg: localpkg}
 
 	n := new(Node)
 	n.Name = new(Name)
 	n.Op = ONAME
-	n.Pos = pos
+	n.Pos = parent.N.(*Node).Pos
 	n.Orig = n
 
 	s.Def = asTypesNode(n)
@@ -5012,7 +5070,7 @@ func (e *ssafn) namedAuto(name string, typ *types.Type, pos src.XPos) ssa.GCNode
 	n.Name.Curfn = e.curfn
 	e.curfn.Func.Dcl = append(e.curfn.Func.Dcl, n)
 	dowidth(t)
-	return n
+	return ssa.LocalSlot{N: n, Type: t, Off: 0, SplitOf: parent, SplitOffset: offset}
 }
 
 func (e *ssafn) CanSSA(t *types.Type) bool {
@@ -5077,4 +5135,17 @@ func (e *ssafn) Syslook(name string) *obj.LSym {
 
 func (n *Node) Typ() *types.Type {
 	return n.Type
+}
+func (n *Node) StorageClass() ssa.StorageClass {
+	switch n.Class() {
+	case PPARAM:
+		return ssa.ClassParam
+	case PPARAMOUT:
+		return ssa.ClassParamOut
+	case PAUTO:
+		return ssa.ClassAuto
+	default:
+		Fatalf("untranslateable storage class for %v: %s", n, n.Class())
+		return 0
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"debug/elf"
 	"encoding/binary"
 	"errors"
+	"flag"
 	"fmt"
 	"go/build"
 	"io"
@@ -46,7 +47,7 @@ func run(t *testing.T, msg string, args ...string) {
 func goCmd(t *testing.T, args ...string) {
 	newargs := []string{args[0], "-installsuffix=" + suffix}
 	if testing.Verbose() {
-		newargs = append(newargs, "-v")
+		newargs = append(newargs, "-x")
 	}
 	newargs = append(newargs, args[1:]...)
 	c := exec.Command("go", newargs...)
@@ -57,6 +58,7 @@ func goCmd(t *testing.T, args ...string) {
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		err = c.Run()
+		output = []byte("(output above)")
 	} else {
 		output, err = c.CombinedOutput()
 	}
@@ -161,6 +163,8 @@ func testMain(m *testing.M) (int, error) {
 }
 
 func TestMain(m *testing.M) {
+	flag.Parse()
+
 	// Some of the tests install binaries into a custom GOPATH.
 	// That won't work if GOBIN is set.
 	os.Unsetenv("GOBIN")
@@ -837,4 +841,13 @@ func TestInterface(t *testing.T) {
 	goCmd(t, "install", "-buildmode=shared", "-linkshared", "iface_b")
 	goCmd(t, "install", "-linkshared", "iface")
 	run(t, "running type/itab uniqueness tester", "./bin/iface")
+}
+
+// Access a global variable from a library.
+func TestGlobal(t *testing.T) {
+	goCmd(t, "install", "-buildmode=shared", "-linkshared", "globallib")
+	goCmd(t, "install", "-linkshared", "global")
+	run(t, "global executable", "./bin/global")
+	AssertIsLinkedTo(t, "./bin/global", soname)
+	AssertHasRPath(t, "./bin/global", gorootInstallDir)
 }

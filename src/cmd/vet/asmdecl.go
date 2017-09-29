@@ -109,7 +109,7 @@ func init() {
 var (
 	re           = regexp.MustCompile
 	asmPlusBuild = re(`//\s+\+build\s+([^\n]+)`)
-	asmTEXT      = re(`\bTEXT\b(.*)·([^\(]+)\(SB\)(?:\s*,\s*([0-9A-Z|+]+))?(?:\s*,\s*\$(-?[0-9]+)(?:-([0-9]+))?)?`)
+	asmTEXT      = re(`\bTEXT\b(.*)·([^\(]+)\(SB\)(?:\s*,\s*([0-9A-Z|+()]+))?(?:\s*,\s*\$(-?[0-9]+)(?:-([0-9]+))?)?`)
 	asmDATA      = re(`\b(DATA|GLOBL)\b`)
 	asmNamedFP   = re(`([a-zA-Z0-9_\xFF-\x{10FFFF}]+)(?:\+([0-9]+))\(FP\)`)
 	asmUnnamedFP = re(`[^+\-0-9](([0-9]+)\(FP\))`)
@@ -678,7 +678,7 @@ func asmCheckVar(badf func(string, ...interface{}), fn *asmFunc, line, expr stri
 
 	// Determine whether the match we're holding
 	// is the first or second argument.
-	if strings.Index(line, expr) > strings.Index(line, ",") {
+	if strings.Index(line, expr) > strings.IndexByte(line, ',') {
 		kind = dst
 	} else {
 		kind = src

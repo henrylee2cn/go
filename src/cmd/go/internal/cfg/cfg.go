@@ -60,11 +60,17 @@ var CmdEnv []EnvVar
 
 // Global build parameters (used during package load)
 var (
-	Goarch    string
-	Goos      string
+	Goarch    = BuildContext.GOARCH
+	Goos      = BuildContext.GOOS
 	ExeSuffix string
-	Gopath    []string
+	Gopath    = filepath.SplitList(BuildContext.GOPATH)
 )
+
+func init() {
+	if Goos == "windows" {
+		ExeSuffix = ".exe"
+	}
+}
 
 var (
 	GOROOT    = findGOROOT()
@@ -77,6 +83,16 @@ var (
 	GOARM = fmt.Sprint(objabi.GOARM)
 	GO386 = objabi.GO386
 )
+
+// Update build context to use our computed GOROOT.
+func init() {
+	BuildContext.GOROOT = GOROOT
+	// Note that we must use runtime.GOOS and runtime.GOARCH here,
+	// as the tool directory does not move based on environment variables.
+	// This matches the initialization of ToolDir in go/build,
+	// except for using GOROOT rather than runtime.GOROOT().
+	build.ToolDir = filepath.Join(GOROOT, "pkg/tool/"+runtime.GOOS+"_"+runtime.GOARCH)
+}
 
 func findGOROOT() string {
 	if env := os.Getenv("GOROOT"); env != "" {
@@ -111,4 +127,29 @@ func isGOROOT(path string) bool {
 		return false
 	}
 	return stat.IsDir()
+}
+
+// ExternalLinkingForced reports whether external linking is being
+// forced even for programs that do not use cgo.
+func ExternalLinkingForced() bool {
+	if !BuildContext.CgoEnabled {
+		return false
+	}
+	// Currently build modes c-shared, pie (on systems that do not
+	// support PIE with internal linking mode (currently all
+	// systems: issue #18968)), plugin, and -linkshared force
+	// external linking mode, as of course does
+	// -ldflags=-linkmode=external. External linking mode forces
+	// an import of runtime/cgo.
+	pieCgo := BuildBuildmode == "pie"
+	linkmodeExternal := false
+	for i, a := range BuildLdflags {
+		if a == "-linkmode=external" {
+			linkmodeExternal = true
+		}
+		if a == "-linkmode" && i+1 < len(BuildLdflags) && BuildLdflags[i+1] == "external" {
+			linkmodeExternal = true
+		}
+	}
+	return BuildBuildmode == "c-shared" || BuildBuildmode == "plugin" || pieCgo || BuildLinkshared || linkmodeExternal
 }

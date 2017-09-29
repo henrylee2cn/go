@@ -272,11 +272,14 @@ type sudog struct {
 	// channel this sudog is blocking on. shrinkstack depends on
 	// this for sudogs involved in channel ops.
 
-	g          *g
-	selectdone *uint32 // CAS to 1 to win select race (may point to stack)
-	next       *sudog
-	prev       *sudog
-	elem       unsafe.Pointer // data element (may point to stack)
+	g *g
+
+	// isSelect indicates g is participating in a select, so
+	// g.selectDone must be CAS'd to win the wake-up race.
+	isSelect bool
+	next     *sudog
+	prev     *sudog
+	elem     unsafe.Pointer // data element (may point to stack)
 
 	// The following fields are never accessed concurrently.
 	// For channels, waitlink is only accessed by g.
@@ -354,7 +357,7 @@ type g struct {
 	sysexitticks   int64    // cputicks when syscall has returned (for tracing)
 	traceseq       uint64   // trace event sequencer
 	tracelastp     puintptr // last P emitted an event for this goroutine
-	lockedm        *m
+	lockedm        muintptr
 	sig            uint32
 	writebuf       []byte
 	sigcode0       uintptr
@@ -367,6 +370,7 @@ type g struct {
 	cgoCtxt        []uintptr      // cgo traceback context
 	labels         unsafe.Pointer // profiler labels
 	timer          *timer         // cached timer for time.Sleep
+	selectDone     uint32         // are we participating in a select and did someone win the race?
 
 	// Per-G GC state
 
@@ -410,7 +414,9 @@ type m struct {
 	newSigstack   bool // minit on C thread called sigaltstack
 	printlock     int8
 	incgo         bool // m is executing a cgo call
-	fastrand      uint32
+	fastrand      [2]uint32
+	needextram    bool
+	traceback     uint8
 	ncgocall      uint64      // number of cgo calls in total
 	ncgo          int32       // number of cgo calls currently in progress
 	cgoCallersUse uint32      // if non-zero, cgoCallers in use temporarily
@@ -419,15 +425,13 @@ type m struct {
 	alllink       *m // on allm
 	schedlink     muintptr
 	mcache        *mcache
-	lockedg       *g
-	createstack   [32]uintptr // stack that created this thread.
-	freglo        [16]uint32  // d[i] lsb and f[i]
-	freghi        [16]uint32  // d[i] msb and f[i+16]
-	fflag         uint32      // floating point compare flags
-	locked        uint32      // tracking for lockosthread
-	nextwaitm     uintptr     // next m waiting for lock
-	needextram    bool
-	traceback     uint8
+	lockedg       guintptr
+	createstack   [32]uintptr    // stack that created this thread.
+	freglo        [16]uint32     // d[i] lsb and f[i]
+	freghi        [16]uint32     // d[i] msb and f[i+16]
+	fflag         uint32         // floating point compare flags
+	locked        uint32         // tracking for lockosthread
+	nextwaitm     uintptr        // next m waiting for lock
 	waitunlockf   unsafe.Pointer // todo go func(*g, unsafe.pointer) bool
 	waitlock      unsafe.Pointer
 	waittraceev   byte
@@ -516,12 +520,6 @@ type p struct {
 	pad [sys.CacheLineSize]byte
 }
 
-const (
-	// The max value of GOMAXPROCS.
-	// There are no fundamental restrictions on the value.
-	_MaxGomaxprocs = 1 << 10
-)
-
 type schedt struct {
 	// accessed atomically. keep at top to ensure alignment on 32-bit systems.
 	goidgen  uint64
@@ -590,6 +588,7 @@ const (
 	_LockInternal = 2
 )
 
+// Values for the flags field of a sigTabT.
 const (
 	_SigNotify   = 1 << iota // let signal.Notify have signal, even if from kernel
 	_SigKill                 // if signal.Notify doesn't take it, exit quietly
@@ -599,6 +598,7 @@ const (
 	_SigGoExit               // cause all runtime procs to exit (only used on Plan 9).
 	_SigSetStack             // add SA_ONSTACK to libc handler
 	_SigUnblock              // unblocked in minit
+	_SigIgn                  // _SIG_DFL action is to ignore the signal
 )
 
 // Layout of in-memory per-function information prepared by linker
@@ -624,14 +624,11 @@ type _func struct {
 // Needs to be in sync with
 // ../cmd/compile/internal/gc/reflect.go:/^func.dumptypestructs.
 type itab struct {
-	inter  *interfacetype
-	_type  *_type
-	link   *itab
-	hash   uint32 // copy of _type.hash. Used for type switches.
-	bad    bool   // type does not implement interface
-	inhash bool   // has this itab been added to hash?
-	unused [2]byte
-	fun    [1]uintptr // variable sized
+	inter *interfacetype
+	_type *_type
+	hash  uint32 // copy of _type.hash. Used for type switches.
+	_     [4]byte
+	fun   [1]uintptr // variable sized. fun[0]==0 means _type does not implement inter.
 }
 
 // Lock-free stack node.
@@ -672,7 +669,8 @@ func extendRandom(r []byte, n int) {
 	}
 }
 
-// deferred subroutine calls
+// A _defer holds an entry on the list of deferred calls.
+// If you add a field here, add code to clear it in freedefer.
 type _defer struct {
 	siz     int32
 	started bool
@@ -716,15 +714,15 @@ const (
 const _TracebackMaxFrames = 100
 
 var (
-	emptystring string
-	allglen     uintptr
-	allm        *m
-	allp        [_MaxGomaxprocs + 1]*p
-	gomaxprocs  int32
-	ncpu        int32
-	forcegc     forcegcstate
-	sched       schedt
-	newprocs    int32
+	allglen    uintptr
+	allm       *m
+	allp       []*p  // len(allp) == gomaxprocs; may change at safe points, otherwise immutable
+	allpLock   mutex // Protects P-less reads of allp and all writes
+	gomaxprocs int32
+	ncpu       int32
+	forcegc    forcegcstate
+	sched      schedt
+	newprocs   int32
 
 	// Information about what cpu features are available.
 	// Set on startup in asm_{386,amd64,amd64p32}.s.

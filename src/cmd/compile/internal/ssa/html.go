@@ -11,6 +11,7 @@ import (
 	"html"
 	"io"
 	"os"
+	"strings"
 )
 
 type HTMLWriter struct {
@@ -360,7 +361,19 @@ func (v *Value) LongHTML() string {
 	}
 	r := v.Block.Func.RegAlloc
 	if int(v.ID) < len(r) && r[v.ID] != nil {
-		s += " : " + html.EscapeString(r[v.ID].Name())
+		s += " : " + html.EscapeString(r[v.ID].String())
+	}
+	var names []string
+	for name, values := range v.Block.Func.NamedValues {
+		for _, value := range values {
+			if value == v {
+				names = append(names, name.String())
+				break // drop duplicates.
+			}
+		}
+	}
+	if len(names) != 0 {
+		s += " (" + strings.Join(names, ", ") + ")"
 	}
 	s += "</span>"
 	return s
@@ -469,7 +482,7 @@ func (p htmlFuncPrinter) endDepCycle() {
 }
 
 func (p htmlFuncPrinter) named(n LocalSlot, vals []*Value) {
-	fmt.Fprintf(p.w, "<li>name %s: ", n.Name())
+	fmt.Fprintf(p.w, "<li>name %s: ", n)
 	for _, val := range vals {
 		fmt.Fprintf(p.w, "%s ", val.HTML())
 	}

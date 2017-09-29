@@ -44,6 +44,7 @@ var (
 	Debug_vlog         bool
 	Debug_wb           int
 	Debug_pctab        string
+	Debug_locationlist int
 )
 
 // Debug arguments.
@@ -69,6 +70,7 @@ var debugtab = []struct {
 	{"wb", "print information about write barriers", &Debug_wb},
 	{"export", "print export data", &Debug_export},
 	{"pctab", "print named pc-value table", &Debug_pctab},
+	{"locationlists", "print information about DWARF location list creation", &Debug_locationlist},
 }
 
 const debugHelpHeader = `usage: -d arg[,arg]* and arg is <key>[=<value>]
@@ -104,7 +106,7 @@ func hidePanic() {
 
 func doversion() {
 	p := objabi.Expstring()
-	if p == "X:none" {
+	if p == objabi.DefaultExpstring() {
 		p = ""
 	}
 	sep := ""
@@ -192,6 +194,7 @@ func Main(archInit func(*Arch)) {
 	flag.BoolVar(&pure_go, "complete", false, "compiling complete package (no C or assembly)")
 	flag.StringVar(&debugstr, "d", "", "print debug information about items in `list`; try -d help")
 	flag.BoolVar(&flagDWARF, "dwarf", true, "generate DWARF symbols")
+	flag.BoolVar(&Ctxt.Flag_locationlists, "dwarflocationlists", false, "add location lists to DWARF in optimized mode")
 	objabi.Flagcount("e", "no limit on number of errors reported", &Debug['e'])
 	objabi.Flagcount("f", "debug stack frames", &Debug['f'])
 	objabi.Flagcount("h", "halt on error", &Debug['h'])
@@ -298,6 +301,9 @@ func Main(archInit func(*Arch)) {
 	if nBackendWorkers > 1 && !concurrentBackendAllowed() {
 		log.Fatalf("cannot use concurrent backend compilation with provided flags; invoked as %v", os.Args)
 	}
+	if Ctxt.Flag_locationlists && len(Ctxt.Arch.DWARFRegisters) == 0 {
+		log.Fatalf("location lists requested but register mapping not available on %v", Ctxt.Arch.Name)
+	}
 
 	// parse -d argument
 	if debugstr != "" {
@@ -358,7 +364,7 @@ func Main(archInit func(*Arch)) {
 				// _ in phase name also matches space
 				phase := name[4:]
 				flag := "debug" // default flag is debug
-				if i := strings.Index(phase, "/"); i >= 0 {
+				if i := strings.IndexByte(phase, '/'); i >= 0 {
 					flag = phase[i+1:]
 					phase = phase[:i]
 				}
@@ -383,7 +389,7 @@ func Main(archInit func(*Arch)) {
 		Debug['l'] = 1 - Debug['l']
 	}
 
-	trackScopes = flagDWARF && Debug['l'] == 0 && Debug['N'] != 0
+	trackScopes = flagDWARF && ((Debug['l'] == 0 && Debug['N'] != 0) || Ctxt.Flag_locationlists)
 
 	Widthptr = thearch.LinkArch.PtrSize
 	Widthreg = thearch.LinkArch.RegSize
@@ -683,7 +689,7 @@ func addImportMap(s string) {
 	if strings.Count(s, "=") != 1 {
 		log.Fatal("-importmap argument must be of the form source=actual")
 	}
-	i := strings.Index(s, "=")
+	i := strings.IndexByte(s, '=')
 	source, actual := s[:i], s[i+1:]
 	if source == "" || actual == "" {
 		log.Fatal("-importmap argument must be of the form source=actual; source and actual must be non-empty")
@@ -706,13 +712,13 @@ func readImportCfg(file string) {
 		}
 
 		var verb, args string
-		if i := strings.Index(line, " "); i < 0 {
+		if i := strings.IndexByte(line, ' '); i < 0 {
 			verb = line
 		} else {
 			verb, args = line[:i], strings.TrimSpace(line[i+1:])
 		}
 		var before, after string
-		if i := strings.Index(args, "="); i >= 0 {
+		if i := strings.IndexByte(args, '='); i >= 0 {
 			before, after = args[:i], args[i+1:]
 		}
 		switch verb {
@@ -763,7 +769,7 @@ func isDriveLetter(b byte) bool {
 	return 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z'
 }
 
-// is this path a local name?  begins with ./ or ../ or /
+// is this path a local name? begins with ./ or ../ or /
 func islocalname(name string) bool {
 	return strings.HasPrefix(name, "/") ||
 		runtime.GOOS == "windows" && len(name) >= 3 && isDriveLetter(name[0]) && name[1] == ':' && name[2] == '/' ||
@@ -868,7 +874,7 @@ func loadsys() {
 			n.Type = typ
 			declare(n, PFUNC)
 		case varTag:
-			importvar(Runtimepkg, sym, typ)
+			importvar(lineno, Runtimepkg, sym, typ)
 		default:
 			Fatalf("unhandled declaration tag %v", d.tag)
 		}

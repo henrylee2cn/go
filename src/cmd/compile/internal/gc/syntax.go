@@ -7,6 +7,7 @@
 package gc
 
 import (
+	"cmd/compile/internal/ssa"
 	"cmd/compile/internal/syntax"
 	"cmd/compile/internal/types"
 	"cmd/internal/obj"
@@ -44,7 +45,6 @@ type Node struct {
 	// - ONAME nodes that refer to local variables use it to identify their stack frame position.
 	// - ODOT, ODOTPTR, and OINDREGSP use it to indicate offset relative to their base address.
 	// - OSTRUCTKEY uses it to store the named field's offset.
-	// - OXCASE and OXFALL use it to validate the use of fallthrough.
 	// - Named OLITERALs use it to to store their ambient iota value.
 	// Possibly still more uses. If you find any, document them.
 	Xoffset int64
@@ -369,6 +369,7 @@ type Func struct {
 	Closgen    int
 	Outerfunc  *Node // outer function (for closure)
 	FieldTrack map[*types.Sym]struct{}
+	DebugInfo  *ssa.FuncDebug
 	Ntype      *Node // signature
 	Top        int   // top context (Ecall, Eproc, etc)
 	Closure    *Node // OCLOSURE <-> ODCLFUNC
@@ -562,8 +563,7 @@ const (
 	OCONTINUE // continue
 	ODEFER    // defer Left (Left must be call)
 	OEMPTY    // no-op (empty statement)
-	OFALL     // fallthrough (after processing)
-	OXFALL    // fallthrough (before processing)
+	OFALL     // fallthrough
 	OFOR      // for Ninit; Left; Right { Nbody }
 	OFORUNTIL // for Ninit; Left; Right { Nbody } ; test applied after executing body, not before
 	OGOTO     // goto Left

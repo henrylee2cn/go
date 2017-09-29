@@ -6,6 +6,15 @@
 // easier to remap stdin and stdout, connect I/O with pipes, and do other
 // adjustments.
 //
+// Unlike the "system" library call from C and other languages, the
+// os/exec package intentionally does not invoke the system shell and
+// does not expand any glob patterns or handle other expansions,
+// pipelines, or redirections typically done by shells. The package
+// behaves more like C's "exec" family of functions. To expand glob
+// patterns, either call the shell directly, taking care to escape any
+// dangerous input, or use the path/filepath package's Glob function.
+// To expand environment variables, use package os's ExpandEnv.
+//
 // Note that the examples in this package assume a Unix system.
 // They may not run on Windows, and they do not run in the Go Playground
 // used by golang.org and godoc.org.
@@ -407,8 +416,10 @@ func (e *ExitError) Error() string {
 	return e.ProcessState.String()
 }
 
-// Wait waits for the command to exit.
-// It must have been started by Start.
+// Wait waits for the command to exit and waits for any copying to
+// stdin or copying from stdout or stderr to complete.
+//
+// The command must have been started by Start.
 //
 // The returned error is nil if the command runs, has no problems
 // copying stdin, stdout, and stderr, and exits with a zero exit
@@ -516,16 +527,15 @@ func (c *Cmd) StdinPipe() (io.WriteCloser, error) {
 	c.Stdin = pr
 	c.closeAfterStart = append(c.closeAfterStart, pr)
 	wc := &closeOnce{File: pw}
-	c.closeAfterWait = append(c.closeAfterWait, closerFunc(wc.safeClose))
+	c.closeAfterWait = append(c.closeAfterWait, wc)
 	return wc, nil
 }
 
 type closeOnce struct {
 	*os.File
 
-	writers sync.RWMutex // coordinate safeClose and Write
-	once    sync.Once
-	err     error
+	once sync.Once
+	err  error
 }
 
 func (c *closeOnce) Close() error {
@@ -535,55 +545,6 @@ func (c *closeOnce) Close() error {
 
 func (c *closeOnce) close() {
 	c.err = c.File.Close()
-}
-
-type closerFunc func() error
-
-func (f closerFunc) Close() error { return f() }
-
-// safeClose closes c being careful not to race with any calls to c.Write.
-// See golang.org/issue/9307 and TestEchoFileRace in exec_test.go.
-// In theory other calls could also be excluded (by writing appropriate
-// wrappers like c.Write's implementation below), but since c is most
-// commonly used as a WriteCloser, Write is the main one to worry about.
-// See also #7970, for which this is a partial fix for this specific instance.
-// The idea is that we return a WriteCloser, and so the caller can be
-// relied upon not to call Write and Close simultaneously, but it's less
-// obvious that cmd.Wait calls Close and that the caller must not call
-// Write and cmd.Wait simultaneously. In fact that seems too onerous.
-// So we change the use of Close in cmd.Wait to use safeClose, which will
-// synchronize with any Write.
-//
-// It's important that we know this won't block forever waiting for the
-// operations being excluded. At the point where this is called,
-// the invoked command has exited and the parent copy of the read side
-// of the pipe has also been closed, so there should really be no read side
-// of the pipe left. Any active writes should return very shortly with an EPIPE,
-// making it reasonable to wait for them.
-// Technically it is possible that the child forked a sub-process or otherwise
-// handed off the read side of the pipe before exiting and the current holder
-// is not reading from the pipe, and the pipe is full, in which case the close here
-// might block waiting for the write to complete. That's probably OK.
-// It's a small enough problem to be outweighed by eliminating the race here.
-func (c *closeOnce) safeClose() error {
-	c.writers.Lock()
-	err := c.Close()
-	c.writers.Unlock()
-	return err
-}
-
-func (c *closeOnce) Write(b []byte) (int, error) {
-	c.writers.RLock()
-	n, err := c.File.Write(b)
-	c.writers.RUnlock()
-	return n, err
-}
-
-func (c *closeOnce) WriteString(s string) (int, error) {
-	c.writers.RLock()
-	n, err := c.File.WriteString(s)
-	c.writers.RUnlock()
-	return n, err
 }
 
 // StdoutPipe returns a pipe that will be connected to the command's
@@ -726,7 +687,7 @@ func dedupEnvCase(caseInsensitive bool, env []string) []string {
 	out := make([]string, 0, len(env))
 	saw := map[string]int{} // key => index into out
 	for _, kv := range env {
-		eq := strings.Index(kv, "=")
+		eq := strings.IndexByte(kv, '=')
 		if eq < 0 {
 			out = append(out, kv)
 			continue

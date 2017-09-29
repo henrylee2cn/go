@@ -10,10 +10,10 @@ extended by RFC 6532.
 Notable divergences:
 	* Obsolete address formats are not parsed, including addresses with
 	  embedded route information.
-	* Group addresses are not parsed.
 	* The full range of spacing (the CFWS syntax element) is not supported,
 	  such as breaking addresses across lines.
 	* No unicode normalization is performed.
+	* Address with some RFC 5322 3.2.3 specials without quotes are parsed.
 */
 package mail
 
@@ -49,7 +49,7 @@ type Message struct {
 
 // ReadMessage reads a message from r.
 // The headers are parsed, and the body of the message will be available
-// for reading from r.
+// for reading from msg.Body.
 func ReadMessage(r io.Reader) (msg *Message, err error) {
 	tp := textproto.NewReader(bufio.NewReader(r))
 
@@ -177,7 +177,7 @@ func (p *AddressParser) ParseList(list string) ([]*Address, error) {
 // the name will be rendered according to RFC 2047.
 func (a *Address) String() string {
 	// Format address local@domain
-	at := strings.LastIndex(a.Address, "@")
+	at := strings.LastIndexByte(a.Address, '@')
 	var local, domain string
 	if at < 0 {
 		// This is a malformed address ("@" is required in addr-spec);
@@ -190,7 +190,7 @@ func (a *Address) String() string {
 	// Add quotes if needed
 	quoteLocal := false
 	for i, r := range local {
-		if isAtext(r, false) {
+		if isAtext(r, false, false) {
 			continue
 		}
 		if r == '.' {
@@ -247,13 +247,15 @@ func (p *addrParser) parseAddressList() ([]*Address, error) {
 	var list []*Address
 	for {
 		p.skipSpace()
-		addr, err := p.parseAddress()
+		addrs, err := p.parseAddress(true)
 		if err != nil {
 			return nil, err
 		}
-		list = append(list, addr)
+		list = append(list, addrs...)
 
-		p.skipSpace()
+		if !p.skipCfws() {
+			return nil, errors.New("mail: misformatted parenthetical comment")
+		}
 		if p.empty() {
 			break
 		}
@@ -265,36 +267,45 @@ func (p *addrParser) parseAddressList() ([]*Address, error) {
 }
 
 func (p *addrParser) parseSingleAddress() (*Address, error) {
-	addr, err := p.parseAddress()
+	addrs, err := p.parseAddress(true)
 	if err != nil {
 		return nil, err
 	}
-	p.skipSpace()
+	if !p.skipCfws() {
+		return nil, errors.New("mail: misformatted parenthetical comment")
+	}
 	if !p.empty() {
 		return nil, fmt.Errorf("mail: expected single address, got %q", p.s)
 	}
-	return addr, nil
+	if len(addrs) == 0 {
+		return nil, errors.New("mail: empty group")
+	}
+	if len(addrs) > 1 {
+		return nil, errors.New("mail: group with multiple addresses")
+	}
+	return addrs[0], nil
 }
 
 // parseAddress parses a single RFC 5322 address at the start of p.
-func (p *addrParser) parseAddress() (addr *Address, err error) {
+func (p *addrParser) parseAddress(handleGroup bool) ([]*Address, error) {
 	debug.Printf("parseAddress: %q", p.s)
 	p.skipSpace()
 	if p.empty() {
 		return nil, errors.New("mail: no address")
 	}
 
-	// address = name-addr / addr-spec
-	// TODO(dsymonds): Support parsing group address.
+	// address = mailbox / group
+	// mailbox = name-addr / addr-spec
+	// group = display-name ":" [group-list] ";" [CFWS]
 
 	// addr-spec has a more restricted grammar than name-addr,
 	// so try parsing it first, and fallback to name-addr.
 	// TODO(dsymonds): Is this really correct?
 	spec, err := p.consumeAddrSpec()
 	if err == nil {
-		return &Address{
+		return []*Address{{
 			Address: spec,
-		}, err
+		}}, err
 	}
 	debug.Printf("parseAddress: not an addr-spec: %v", err)
 	debug.Printf("parseAddress: state is now %q", p.s)
@@ -309,8 +320,13 @@ func (p *addrParser) parseAddress() (addr *Address, err error) {
 	}
 	debug.Printf("parseAddress: displayName=%q", displayName)
 
-	// angle-addr = "<" addr-spec ">"
 	p.skipSpace()
+	if handleGroup {
+		if p.consume(':') {
+			return p.consumeGroupList()
+		}
+	}
+	// angle-addr = "<" addr-spec ">"
 	if !p.consume('<') {
 		return nil, errors.New("mail: no angle-addr")
 	}
@@ -323,10 +339,42 @@ func (p *addrParser) parseAddress() (addr *Address, err error) {
 	}
 	debug.Printf("parseAddress: spec=%q", spec)
 
-	return &Address{
+	return []*Address{{
 		Name:    displayName,
 		Address: spec,
-	}, nil
+	}}, nil
+}
+
+func (p *addrParser) consumeGroupList() ([]*Address, error) {
+	var group []*Address
+	// handle empty group.
+	p.skipSpace()
+	if p.consume(';') {
+		p.skipCfws()
+		return group, nil
+	}
+
+	for {
+		p.skipSpace()
+		// embedded groups not allowed.
+		addrs, err := p.parseAddress(false)
+		if err != nil {
+			return nil, err
+		}
+		group = append(group, addrs...)
+
+		if !p.skipCfws() {
+			return nil, errors.New("mail: misformatted parenthetical comment")
+		}
+		if p.consume(';') {
+			p.skipCfws()
+			break
+		}
+		if !p.consume(',') {
+			return nil, errors.New("mail: expected comma")
+		}
+	}
+	return group, nil
 }
 
 // consumeAddrSpec parses a single RFC 5322 addr-spec at the start of p.
@@ -482,20 +530,20 @@ Loop:
 
 // consumeAtom parses an RFC 5322 atom at the start of p.
 // If dot is true, consumeAtom parses an RFC 5322 dot-atom instead.
-// If permissive is true, consumeAtom will not fail on
-// leading/trailing/double dots in the atom (see golang.org/issue/4938).
+// If permissive is true, consumeAtom will not fail on:
+// - leading/trailing/double dots in the atom (see golang.org/issue/4938)
+// - special characters (RFC 5322 3.2.3) except '<', '>', ':' and '"' (see golang.org/issue/21018)
 func (p *addrParser) consumeAtom(dot bool, permissive bool) (atom string, err error) {
 	i := 0
 
 Loop:
 	for {
 		r, size := utf8.DecodeRuneInString(p.s[i:])
-
 		switch {
 		case size == 1 && r == utf8.RuneError:
 			return "", fmt.Errorf("mail: invalid utf-8 in address: %q", p.s)
 
-		case size == 0 || !isAtext(r, dot):
+		case size == 0 || !isAtext(r, dot, permissive):
 			break Loop
 
 		default:
@@ -547,6 +595,47 @@ func (p *addrParser) len() int {
 	return len(p.s)
 }
 
+// skipCfws skips CFWS as defined in RFC5322.
+func (p *addrParser) skipCfws() bool {
+	p.skipSpace()
+
+	for {
+		if !p.consume('(') {
+			break
+		}
+
+		if !p.skipComment() {
+			return false
+		}
+
+		p.skipSpace()
+	}
+
+	return true
+}
+
+func (p *addrParser) skipComment() bool {
+	// '(' already consumed.
+	depth := 1
+
+	for {
+		if p.empty() || depth == 0 {
+			break
+		}
+
+		if p.peek() == '\\' && p.len() > 1 {
+			p.s = p.s[1:]
+		} else if p.peek() == '(' {
+			depth++
+		} else if p.peek() == ')' {
+			depth--
+		}
+		p.s = p.s[1:]
+	}
+
+	return depth == 0
+}
+
 func (p *addrParser) decodeRFC2047Word(s string) (word string, isEncoded bool, err error) {
 	if p.dec != nil {
 		word, err = p.dec.Decode(s)
@@ -580,12 +669,18 @@ func (e charsetError) Error() string {
 
 // isAtext reports whether r is an RFC 5322 atext character.
 // If dot is true, period is included.
-func isAtext(r rune, dot bool) bool {
+// If permissive is true, RFC 5322 3.2.3 specials is included,
+// except '<', '>', ':' and '"'.
+func isAtext(r rune, dot, permissive bool) bool {
 	switch r {
 	case '.':
 		return dot
 
-	case '(', ')', '<', '>', '[', ']', ':', ';', '@', '\\', ',', '"': // RFC 5322 3.2.3. specials
+	// RFC 5322 3.2.3. specials
+	case '(', ')', '[', ']', ';', '@', '\\', ',':
+		return permissive
+
+	case '<', '>', '"', ':':
 		return false
 	}
 	return isVchar(r)

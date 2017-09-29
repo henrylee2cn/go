@@ -415,10 +415,7 @@ func gcAssistAlloc(gp *g) {
 		return
 	}
 
-	if trace.enabled {
-		traceGCMarkAssistStart()
-	}
-
+	traced := false
 retry:
 	// Compute the amount of scan work we need to do to make the
 	// balance positive. When the required amount of work is low,
@@ -454,11 +451,16 @@ retry:
 		if scanWork == 0 {
 			// We were able to steal all of the credit we
 			// needed.
-			if trace.enabled {
+			if traced {
 				traceGCMarkAssistDone()
 			}
 			return
 		}
+	}
+
+	if trace.enabled && !traced {
+		traced = true
+		traceGCMarkAssistStart()
 	}
 
 	// Perform assist work
@@ -503,7 +505,7 @@ retry:
 		// At this point either background GC has satisfied
 		// this G's assist debt, or the GC cycle is over.
 	}
-	if trace.enabled {
+	if traced {
 		traceGCMarkAssistDone()
 	}
 }
@@ -1354,10 +1356,7 @@ func gcmarknewobject(obj, size, scanSize uintptr) {
 //
 // The world must be stopped.
 func gcMarkTinyAllocs() {
-	for _, p := range &allp {
-		if p == nil || p.status == _Pdead {
-			break
-		}
+	for _, p := range allp {
 		c := p.mcache
 		if c == nil || c.tiny == 0 {
 			continue

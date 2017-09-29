@@ -618,6 +618,11 @@ func (t *Transport) connectMethodForRequest(treq *transportRequest) (cm connectM
 			if port := cm.proxyURL.Port(); !validPort(port) {
 				return cm, fmt.Errorf("invalid proxy URL port %q", port)
 			}
+			switch cm.proxyURL.Scheme {
+			case "http", "socks5":
+			default:
+				return cm, fmt.Errorf("invalid proxy URL scheme %q", cm.proxyURL.Scheme)
+			}
 		}
 	}
 	return cm, err
@@ -1224,23 +1229,23 @@ func useProxy(addr string) bool {
 		}
 	}
 
-	no_proxy := noProxyEnv.Get()
-	if no_proxy == "*" {
+	noProxy := noProxyEnv.Get()
+	if noProxy == "*" {
 		return false
 	}
 
 	addr = strings.ToLower(strings.TrimSpace(addr))
 	if hasPort(addr) {
-		addr = addr[:strings.LastIndex(addr, ":")]
+		addr = addr[:strings.LastIndexByte(addr, ':')]
 	}
 
-	for _, p := range strings.Split(no_proxy, ",") {
+	for _, p := range strings.Split(noProxy, ",") {
 		p = strings.ToLower(strings.TrimSpace(p))
 		if len(p) == 0 {
 			continue
 		}
 		if hasPort(p) {
-			p = p[:strings.LastIndex(p, ":")]
+			p = p[:strings.LastIndexByte(p, ':')]
 		}
 		if addr == p {
 			return false
@@ -1312,7 +1317,7 @@ func (cm *connectMethod) addr() string {
 func (cm *connectMethod) tlsHost() string {
 	h := cm.targetAddr
 	if hasPort(h) {
-		h = h[:strings.LastIndex(h, ":")]
+		h = h[:strings.LastIndexByte(h, ':')]
 	}
 	return h
 }
@@ -1616,6 +1621,7 @@ func (pc *persistConn) readLoop() {
 			body: resp.Body,
 			earlyCloseFn: func() error {
 				waitForBodyRead <- false
+				<-eofc // will be closed by deferred call at the end of the function
 				return nil
 
 			},
@@ -2021,8 +2027,8 @@ func (pc *persistConn) roundTrip(req *transportRequest) (resp *Response, err err
 // a t.Logf func. See export_test.go's Request.WithT method.
 type tLogKey struct{}
 
-func (r *transportRequest) logf(format string, args ...interface{}) {
-	if logf, ok := r.Request.Context().Value(tLogKey{}).(func(string, ...interface{})); ok {
+func (tr *transportRequest) logf(format string, args ...interface{}) {
+	if logf, ok := tr.Request.Context().Value(tLogKey{}).(func(string, ...interface{})); ok {
 		logf(time.Now().Format(time.RFC3339Nano)+": "+format, args...)
 	}
 }

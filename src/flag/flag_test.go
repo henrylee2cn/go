@@ -389,8 +389,14 @@ const defaultOutput = `  -A	for bootstrapping, allow 'any' type
     	a non-zero number (default 2.7)
   -G float
     	a float that defaults to zero
+  -M string
+    	a multiline
+    	help
+    	string
   -N int
     	a non-zero int (default 27)
+  -O	a flag
+    	multiline help string (default true)
   -Z int
     	an int that defaults to zero
   -maxT timeout
@@ -407,7 +413,9 @@ func TestPrintDefaults(t *testing.T) {
 	fs.String("D", "", "set relative `path` for local imports")
 	fs.Float64("F", 2.7, "a non-zero `number`")
 	fs.Float64("G", 0, "a float that defaults to zero")
+	fs.String("M", "", "a multiline\nhelp\nstring")
 	fs.Int("N", 27, "a non-zero int")
+	fs.Bool("O", true, "a flag\nmultiline help string")
 	fs.Int("Z", 0, "an int that defaults to zero")
 	fs.Duration("maxT", 0, "set `timeout` for dial")
 	fs.PrintDefaults()
@@ -430,5 +438,19 @@ func TestIntFlagOverflow(t *testing.T) {
 	}
 	if err := Set("u", "4294967296"); err == nil {
 		t.Error("unexpected success setting Uint")
+	}
+}
+
+// Issue 20998: Usage should respect CommandLine.output.
+func TestUsageOutput(t *testing.T) {
+	ResetForTesting(DefaultUsage)
+	var buf bytes.Buffer
+	CommandLine.SetOutput(&buf)
+	defer func(old []string) { os.Args = old }(os.Args)
+	os.Args = []string{"app", "-i=1", "-unknown"}
+	Parse()
+	const want = "flag provided but not defined: -i\nUsage of app:\n"
+	if got := buf.String(); got != want {
+		t.Errorf("output = %q; want %q", got, want)
 	}
 }

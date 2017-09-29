@@ -98,14 +98,14 @@ type Arch struct {
 	Solarisdynld     string
 	Adddynrel        func(*Link, *Symbol, *Reloc) bool
 	Archinit         func(*Link)
-	Archreloc        func(*Link, *Reloc, *Symbol, *int64) int
+	Archreloc        func(*Link, *Reloc, *Symbol, *int64) bool
 	Archrelocvariant func(*Link, *Reloc, *Symbol, int64) int64
 	Trampoline       func(*Link, *Reloc, *Symbol)
 	Asmb             func(*Link)
-	Elfreloc1        func(*Link, *Reloc, int64) int
+	Elfreloc1        func(*Link, *Reloc, int64) bool
 	Elfsetupplt      func(*Link)
 	Gentext          func(*Link)
-	Machoreloc1      func(*Symbol, *Reloc, int64) int
+	Machoreloc1      func(*Symbol, *Reloc, int64) bool
 	PEreloc1         func(*Symbol, *Reloc, int64) bool
 	Wput             func(uint16)
 	Lput             func(uint32)
@@ -168,8 +168,12 @@ func (ctxt *Link) DynlinkingGo() bool {
 	if !ctxt.Loaded {
 		panic("DynlinkingGo called before all symbols loaded")
 	}
-	canUsePlugins := ctxt.Syms.ROLookup("plugin.Open", 0) != nil
-	return Buildmode == BuildmodeShared || *FlagLinkshared || Buildmode == BuildmodePlugin || canUsePlugins
+	return Buildmode == BuildmodeShared || *FlagLinkshared || Buildmode == BuildmodePlugin || ctxt.CanUsePlugins()
+}
+
+// CanUsePlugins returns whether a plugins can be used
+func (ctxt *Link) CanUsePlugins() bool {
+	return ctxt.Syms.ROLookup("plugin.Open", 0) != nil
 }
 
 // UseRelro returns whether to make use of "read only relocations" aka
@@ -242,7 +246,7 @@ func (w *outBuf) Offset() int64 {
 
 var coutbuf outBuf
 
-const pkgname = "__.PKGDEF"
+const pkgdef = "__.PKGDEF"
 
 var (
 	// Set if we see an object compiled by the host compiler that is not
@@ -334,8 +338,8 @@ func errorexit() {
 
 func loadinternal(ctxt *Link, name string) *Library {
 	if *FlagLinkshared && ctxt.PackageShlib != nil {
-		if shlibname := ctxt.PackageShlib[name]; shlibname != "" {
-			return addlibpath(ctxt, "internal", "internal", "", name, shlibname)
+		if shlib := ctxt.PackageShlib[name]; shlib != "" {
+			return addlibpath(ctxt, "internal", "internal", "", name, shlib)
 		}
 	}
 	if ctxt.PackageFile != nil {
@@ -419,25 +423,27 @@ func (ctxt *Link) loadlib() {
 		loadinternal(ctxt, "runtime/msan")
 	}
 
-	var i int
-	for i = 0; i < len(ctxt.Library); i++ {
-		iscgo = iscgo || ctxt.Library[i].Pkg == "runtime/cgo"
-		if ctxt.Library[i].Shlib == "" {
+	// ctxt.Library grows during the loop, so not a range loop.
+	for i := 0; i < len(ctxt.Library); i++ {
+		lib := ctxt.Library[i]
+		if lib.Shlib == "" {
 			if ctxt.Debugvlog > 1 {
-				ctxt.Logf("%5.2f autolib: %s (from %s)\n", Cputime(), ctxt.Library[i].File, ctxt.Library[i].Objref)
+				ctxt.Logf("%5.2f autolib: %s (from %s)\n", Cputime(), lib.File, lib.Objref)
 			}
-			objfile(ctxt, ctxt.Library[i])
+			objfile(ctxt, lib)
 		}
 	}
 
-	for i = 0; i < len(ctxt.Library); i++ {
-		if ctxt.Library[i].Shlib != "" {
+	for _, lib := range ctxt.Library {
+		if lib.Shlib != "" {
 			if ctxt.Debugvlog > 1 {
-				ctxt.Logf("%5.2f autolib: %s (from %s)\n", Cputime(), ctxt.Library[i].Shlib, ctxt.Library[i].Objref)
+				ctxt.Logf("%5.2f autolib: %s (from %s)\n", Cputime(), lib.Shlib, lib.Objref)
 			}
-			ldshlibsyms(ctxt, ctxt.Library[i].Shlib)
+			ldshlibsyms(ctxt, lib.Shlib)
 		}
 	}
+
+	iscgo = ctxt.Syms.ROLookup("x_cgo_init", 0) != nil
 
 	// We now have enough information to determine the link mode.
 	determineLinkMode(ctxt)
@@ -456,21 +462,19 @@ func (ctxt *Link) loadlib() {
 		toc.Type = SDYNIMPORT
 	}
 
-	if Linkmode == LinkExternal && !iscgo {
+	if Linkmode == LinkExternal && !iscgo && ctxt.LibraryByPkg["runtime/cgo"] == nil {
 		// This indicates a user requested -linkmode=external.
 		// The startup code uses an import of runtime/cgo to decide
 		// whether to initialize the TLS.  So give it one. This could
 		// be handled differently but it's an unusual case.
-		loadinternal(ctxt, "runtime/cgo")
-
-		if i < len(ctxt.Library) {
-			if ctxt.Library[i].Shlib != "" {
-				ldshlibsyms(ctxt, ctxt.Library[i].Shlib)
+		if lib := loadinternal(ctxt, "runtime/cgo"); lib != nil {
+			if lib.Shlib != "" {
+				ldshlibsyms(ctxt, lib.Shlib)
 			} else {
 				if Buildmode == BuildmodeShared || *FlagLinkshared {
 					Exitf("cannot implicitly include runtime/cgo in a shared library")
 				}
-				objfile(ctxt, ctxt.Library[i])
+				objfile(ctxt, lib)
 			}
 		}
 	}
@@ -628,9 +632,9 @@ func (ctxt *Link) loadlib() {
 	// If package versioning is required, generate a hash of the
 	// the packages used in the link.
 	if Buildmode == BuildmodeShared || Buildmode == BuildmodePlugin || ctxt.Syms.ROLookup("plugin.Open", 0) != nil {
-		for i = 0; i < len(ctxt.Library); i++ {
-			if ctxt.Library[i].Shlib == "" {
-				genhash(ctxt, ctxt.Library[i])
+		for _, lib := range ctxt.Library {
+			if lib.Shlib == "" {
+				genhash(ctxt, lib)
 			}
 		}
 	}
@@ -724,8 +728,17 @@ func genhash(ctxt *Link, lib *Library) {
 	}
 	defer f.Close()
 
+	var magbuf [len(ARMAG)]byte
+	if _, err := io.ReadFull(f, magbuf[:]); err != nil {
+		Exitf("file %s too short", lib.File)
+	}
+
+	if string(magbuf[:]) != ARMAG {
+		Exitf("%s is not an archive file", lib.File)
+	}
+
 	var arhdr ArHdr
-	l := nextar(f, int64(len(ARMAG)), &arhdr)
+	l := nextar(f, f.Offset(), &arhdr)
 	if l <= 0 {
 		Errorf(nil, "%s: short read on archive file symbol header", lib.File)
 		return
@@ -736,7 +749,7 @@ func genhash(ctxt *Link, lib *Library) {
 	// To compute the hash of a package, we hash the first line of
 	// __.PKGDEF (which contains the toolchain version and any
 	// GOEXPERIMENT flags) and the export data (which is between
-	// the first two occurences of "\n$$").
+	// the first two occurrences of "\n$$").
 
 	pkgDefBytes := make([]byte, atolwhex(arhdr.size))
 	_, err = io.ReadFull(f, pkgDefBytes)
@@ -744,7 +757,7 @@ func genhash(ctxt *Link, lib *Library) {
 		Errorf(nil, "%s: error reading package data: %v", lib.File, err)
 		return
 	}
-	firstEOL := bytes.Index(pkgDefBytes, []byte("\n"))
+	firstEOL := bytes.IndexByte(pkgDefBytes, '\n')
 	if firstEOL < 0 {
 		Errorf(nil, "cannot parse package data of %s for hash generation, no newline found", lib.File)
 		return
@@ -801,7 +814,7 @@ func objfile(ctxt *Link, lib *Library) {
 		goto out
 	}
 
-	if !strings.HasPrefix(arhdr.name, pkgname) {
+	if !strings.HasPrefix(arhdr.name, pkgdef) {
 		Errorf(nil, "%s: cannot find package header", lib.File)
 		goto out
 	}
@@ -1086,7 +1099,8 @@ func (l *Link) hostlink() {
 		argv = append(argv, "-Wl,-headerpad,1144")
 		if l.DynlinkingGo() {
 			argv = append(argv, "-Wl,-flat_namespace")
-		} else if !SysArch.InFamily(sys.ARM64) {
+		}
+		if Buildmode == BuildmodeExe && !SysArch.InFamily(sys.ARM64) {
 			argv = append(argv, "-Wl,-no_pie")
 		}
 	case objabi.Hopenbsd:
@@ -1105,10 +1119,13 @@ func (l *Link) hostlink() {
 			argv = append(argv, "-Wl,-pagezero_size,4000000")
 		}
 	case BuildmodePIE:
-		if UseRelro() {
-			argv = append(argv, "-Wl,-z,relro")
+		// ELF.
+		if Headtype != objabi.Hdarwin {
+			if UseRelro() {
+				argv = append(argv, "-Wl,-z,relro")
+			}
+			argv = append(argv, "-pie")
 		}
-		argv = append(argv, "-pie")
 	case BuildmodeCShared:
 		if Headtype == objabi.Hdarwin {
 			argv = append(argv, "-dynamiclib")
@@ -1252,16 +1269,23 @@ func (l *Link) hostlink() {
 	// toolchain if it is supported.
 	if Buildmode == BuildmodeExe {
 		src := filepath.Join(*flagTmpdir, "trivial.c")
-		if err := ioutil.WriteFile(src, []byte{}, 0666); err != nil {
+		if err := ioutil.WriteFile(src, []byte("int main() { return 0; }"), 0666); err != nil {
 			Errorf(nil, "WriteFile trivial.c failed: %v", err)
 		}
-		cmd := exec.Command(argv[0], "-c", "-no-pie", "trivial.c")
-		cmd.Dir = *flagTmpdir
-		cmd.Env = append([]string{"LC_ALL=C"}, os.Environ()...)
-		out, err := cmd.CombinedOutput()
-		supported := err == nil && !bytes.Contains(out, []byte("unrecognized"))
-		if supported {
-			argv = append(argv, "-no-pie")
+
+		// GCC uses -no-pie, clang uses -nopie.
+		for _, nopie := range []string{"-no-pie", "-nopie"} {
+			cmd := exec.Command(argv[0], nopie, "trivial.c")
+			cmd.Dir = *flagTmpdir
+			cmd.Env = append([]string{"LC_ALL=C"}, os.Environ()...)
+			out, err := cmd.CombinedOutput()
+			// GCC says "unrecognized command line option ‘-no-pie’"
+			// clang says "unknown argument: '-no-pie'"
+			supported := err == nil && !bytes.Contains(out, []byte("unrecognized")) && !bytes.Contains(out, []byte("unknown"))
+			if supported {
+				argv = append(argv, nopie)
+				break
+			}
 		}
 	}
 
@@ -1513,6 +1537,9 @@ func readnote(f *elf.File, name []byte, typ int32) ([]byte, error) {
 }
 
 func findshlib(ctxt *Link, shlib string) string {
+	if filepath.IsAbs(shlib) {
+		return shlib
+	}
 	for _, libdir := range ctxt.Libdir {
 		libpath := filepath.Join(libdir, shlib)
 		if _, err := os.Stat(libpath); err == nil {
@@ -1524,9 +1551,15 @@ func findshlib(ctxt *Link, shlib string) string {
 }
 
 func ldshlibsyms(ctxt *Link, shlib string) {
-	libpath := findshlib(ctxt, shlib)
-	if libpath == "" {
-		return
+	var libpath string
+	if filepath.IsAbs(shlib) {
+		libpath = shlib
+		shlib = filepath.Base(shlib)
+	} else {
+		libpath = findshlib(ctxt, shlib)
+		if libpath == "" {
+			return
+		}
 	}
 	for _, processedlib := range ctxt.Shlibs {
 		if processedlib.Path == libpath {
@@ -1542,6 +1575,7 @@ func ldshlibsyms(ctxt *Link, shlib string) {
 		Errorf(nil, "cannot open shared library: %s", libpath)
 		return
 	}
+	defer f.Close()
 
 	hash, err := readnote(f, ELF_NOTE_GO_NAME, ELF_NOTE_GOABIHASH_TAG)
 	if err != nil {
@@ -1554,7 +1588,22 @@ func ldshlibsyms(ctxt *Link, shlib string) {
 		Errorf(nil, "cannot read dep list from shared library %s: %v", libpath, err)
 		return
 	}
-	deps := strings.Split(string(depsbytes), "\n")
+	var deps []string
+	for _, dep := range strings.Split(string(depsbytes), "\n") {
+		if dep == "" {
+			continue
+		}
+		if !filepath.IsAbs(dep) {
+			// If the dep can be interpreted as a path relative to the shlib
+			// in which it was found, do that. Otherwise, we will leave it
+			// to be resolved by libdir lookup.
+			abs := filepath.Join(filepath.Dir(libpath), dep)
+			if _, err := os.Stat(abs); err == nil {
+				dep = abs
+			}
+		}
+		deps = append(deps, dep)
+	}
 
 	syms, err := f.DynamicSymbols()
 	if err != nil {
@@ -1907,7 +1956,6 @@ const (
 	BSSSym                  = 'B'
 	UndefinedSym            = 'U'
 	TLSSym                  = 't'
-	FileSym                 = 'f'
 	FrameSym                = 'm'
 	ParamSym                = 'p'
 	AutoSym                 = 'a'
@@ -1918,7 +1966,12 @@ func genasmsym(ctxt *Link, put func(*Link, *Symbol, string, SymbolType, int64, *
 	// skip STEXT symbols. Normal STEXT symbols are emitted by walking textp.
 	s := ctxt.Syms.Lookup("runtime.text", 0)
 	if s.Type == STEXT {
-		put(ctxt, s, s.Name, TextSym, s.Value, nil)
+		// We've already included this symbol in ctxt.Textp
+		// if ctxt.DynlinkingGo() && Headtype == objabi.Hdarwin.
+		// See data.go:/textaddress
+		if !(ctxt.DynlinkingGo() && Headtype == objabi.Hdarwin) {
+			put(ctxt, s, s.Name, TextSym, s.Value, nil)
+		}
 	}
 
 	n := 0
@@ -1944,7 +1997,12 @@ func genasmsym(ctxt *Link, put func(*Link, *Symbol, string, SymbolType, int64, *
 
 	s = ctxt.Syms.Lookup("runtime.etext", 0)
 	if s.Type == STEXT {
-		put(ctxt, s, s.Name, TextSym, s.Value, nil)
+		// We've already included this symbol in ctxt.Textp
+		// if ctxt.DynlinkingGo() && Headtype == objabi.Hdarwin.
+		// See data.go:/textaddress
+		if !(ctxt.DynlinkingGo() && Headtype == objabi.Hdarwin) {
+			put(ctxt, s, s.Name, TextSym, s.Value, nil)
+		}
 	}
 
 	for _, s := range ctxt.Syms.Allsym {
@@ -1991,9 +2049,6 @@ func genasmsym(ctxt *Link, put func(*Link, *Symbol, string, SymbolType, int64, *
 				Errorf(s, "should not be bss (size=%d type=%v special=%v)", len(s.P), s.Type, s.Attr.Special())
 			}
 			put(ctxt, s, s.Name, BSSSym, Symaddr(s), s.Gotype)
-
-		case SFILE:
-			put(ctxt, nil, s.Name, FileSym, s.Value, nil)
 
 		case SHOSTOBJ:
 			if Headtype == objabi.Hwindows || Iself {

@@ -56,6 +56,10 @@ func checkGdbVersion(t *testing.T) {
 }
 
 func checkGdbPython(t *testing.T) {
+	if runtime.GOOS == "solaris" && testenv.Builder() != "solaris-amd64-smartosbuildlet" {
+		t.Skip("skipping gdb python tests on solaris; see golang.org/issue/20821")
+	}
+
 	cmd := exec.Command("gdb", "-nx", "-q", "--batch", "-iex", "python import sys; print('go gdb python support')")
 	out, err := cmd.CombinedOutput()
 
@@ -80,7 +84,7 @@ func main() {
 	slicevar := make([]string, 0, 16)
 	slicevar = append(slicevar, mapvar["abc"])
 	fmt.Println("hi") // line 13
-	_ = ptrvar
+	runtime.KeepAlive(ptrvar)
 	gslice = slicevar
 	runtime.KeepAlive(mapvar)
 }
@@ -128,7 +132,7 @@ func testGdbPython(t *testing.T, cgo bool) {
 
 	cmd := exec.Command(testenv.GoToolPath(t), "build", "-o", "a.exe")
 	cmd.Dir = dir
-	out, err := testEnv(cmd).CombinedOutput()
+	out, err := testenv.CleanCmdEnv(cmd).CombinedOutput()
 	if err != nil {
 		t.Fatalf("building source %v\n%s", err, out)
 	}
@@ -274,7 +278,7 @@ func TestGdbBacktrace(t *testing.T) {
 	}
 	cmd := exec.Command(testenv.GoToolPath(t), "build", "-o", "a.exe")
 	cmd.Dir = dir
-	out, err := testEnv(cmd).CombinedOutput()
+	out, err := testenv.CleanCmdEnv(cmd).CombinedOutput()
 	if err != nil {
 		t.Fatalf("building source %v\n%s", err, out)
 	}
@@ -344,7 +348,7 @@ func TestGdbAutotmpTypes(t *testing.T) {
 	}
 	cmd := exec.Command(testenv.GoToolPath(t), "build", "-gcflags=-N -l", "-o", "a.exe")
 	cmd.Dir = dir
-	out, err := testEnv(cmd).CombinedOutput()
+	out, err := testenv.CleanCmdEnv(cmd).CombinedOutput()
 	if err != nil {
 		t.Fatalf("building source %v\n%s", err, out)
 	}
@@ -375,5 +379,63 @@ func TestGdbAutotmpTypes(t *testing.T) {
 			t.Errorf("could not find %s in 'info typrs astruct' output", name)
 			t.Fatalf("gdb output:\n%v", sgot)
 		}
+	}
+}
+
+const constsSource = `
+package main
+
+const aConstant int = 42
+const largeConstant uint64 = ^uint64(0)
+const minusOne int64 = -1
+
+func main() {
+	println("hello world")
+}
+`
+
+func TestGdbConst(t *testing.T) {
+	t.Parallel()
+	checkGdbEnvironment(t)
+	checkGdbVersion(t)
+
+	dir, err := ioutil.TempDir("", "go-build")
+	if err != nil {
+		t.Fatalf("failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	// Build the source code.
+	src := filepath.Join(dir, "main.go")
+	err = ioutil.WriteFile(src, []byte(constsSource), 0644)
+	if err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+	cmd := exec.Command(testenv.GoToolPath(t), "build", "-gcflags=-N -l", "-o", "a.exe")
+	cmd.Dir = dir
+	out, err := testenv.CleanCmdEnv(cmd).CombinedOutput()
+	if err != nil {
+		t.Fatalf("building source %v\n%s", err, out)
+	}
+
+	// Execute gdb commands.
+	args := []string{"-nx", "-batch",
+		"-ex", "set startup-with-shell off",
+		"-ex", "break main.main",
+		"-ex", "run",
+		"-ex", "print main.aConstant",
+		"-ex", "print main.largeConstant",
+		"-ex", "print main.minusOne",
+		"-ex", "print 'runtime._MSpanInUse'",
+		filepath.Join(dir, "a.exe"),
+	}
+	got, _ := exec.Command("gdb", args...).CombinedOutput()
+
+	sgot := strings.Replace(string(got), "\r\n", "\n", -1)
+
+	t.Logf("output %q", sgot)
+
+	if !strings.Contains(sgot, "\n$1 = 42\n$2 = 18446744073709551615\n$3 = -1\n$4 = 1 '\\001'") {
+		t.Fatalf("output mismatch")
 	}
 }

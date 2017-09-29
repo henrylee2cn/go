@@ -505,8 +505,8 @@ func parse(rawurl string, viaRequest bool) (*URL, error) {
 		// RFC 3986, §3.3:
 		// In addition, a URI reference (Section 4.1) may be a relative-path reference,
 		// in which case the first path segment cannot contain a colon (":") character.
-		colon := strings.Index(rest, ":")
-		slash := strings.Index(rest, "/")
+		colon := strings.IndexByte(rest, ':')
+		slash := strings.IndexByte(rest, '/')
 		if colon >= 0 && (slash < 0 || colon < slash) {
 			// First path segment has colon. Not allowed in relative URL.
 			return nil, errors.New("first path segment in URL cannot contain colon")
@@ -532,7 +532,7 @@ func parse(rawurl string, viaRequest bool) (*URL, error) {
 }
 
 func parseAuthority(authority string) (user *Userinfo, host string, err error) {
-	i := strings.LastIndex(authority, "@")
+	i := strings.LastIndexByte(authority, '@')
 	if i < 0 {
 		host, err = parseHost(authority)
 	} else {
@@ -569,7 +569,7 @@ func parseHost(host string) (string, error) {
 	if strings.HasPrefix(host, "[") {
 		// Parse an IP-Literal in RFC 3986 and RFC 6874.
 		// E.g., "[fe80::1]", "[fe80::1%25en0]", "[fe80::1]:80".
-		i := strings.LastIndex(host, "]")
+		i := strings.LastIndexByte(host, ']')
 		if i < 0 {
 			return "", errors.New("missing ']' in host")
 		}
@@ -726,7 +726,9 @@ func (u *URL) String() string {
 		buf.WriteString(u.Opaque)
 	} else {
 		if u.Scheme != "" || u.Host != "" || u.User != nil {
-			buf.WriteString("//")
+			if u.Host != "" || u.Path != "" || u.User != nil {
+				buf.WriteString("//")
+			}
 			if ui := u.User; ui != nil {
 				buf.WriteString(ui.String())
 				buf.WriteByte('@')
@@ -828,7 +830,7 @@ func parseQuery(m Values, query string) (err error) {
 			continue
 		}
 		value := ""
-		if i := strings.Index(key, "="); i >= 0 {
+		if i := strings.IndexByte(key, '='); i >= 0 {
 			key, value = key[:i], key[i+1:]
 		}
 		key, err1 := QueryUnescape(key)
@@ -883,7 +885,7 @@ func resolvePath(base, ref string) string {
 	if ref == "" {
 		full = base
 	} else if ref[0] != '/' {
-		i := strings.LastIndex(base, "/")
+		i := strings.LastIndexByte(base, '/')
 		full = base[:i+1] + ref
 	} else {
 		full = ref
@@ -953,12 +955,10 @@ func (u *URL) ResolveReference(ref *URL) *URL {
 		url.Path = ""
 		return &url
 	}
-	if ref.Path == "" {
-		if ref.RawQuery == "" {
-			url.RawQuery = u.RawQuery
-			if ref.Fragment == "" {
-				url.Fragment = u.Fragment
-			}
+	if ref.Path == "" && ref.RawQuery == "" {
+		url.RawQuery = u.RawQuery
+		if ref.Fragment == "" {
+			url.Fragment = u.Fragment
 		}
 	}
 	// The "abs_path" or "rel_path" cases.

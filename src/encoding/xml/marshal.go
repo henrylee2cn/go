@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	// A generic XML header suitable for use with the output of Marshal.
+	// Header is a generic XML header suitable for use with the output of Marshal.
 	// This is not automatically added to any output of this package,
 	// it is provided as a convenience.
-	Header = `<?xml version="1.0" encoding="UTF-8"?>` + "\n"
+	Header             = `<?xml version="1.0" encoding="UTF-8"?>` + "\n"
+	xmlNamespacePrefix = "xml"
 )
 
 // Marshal returns the XML encoding of v.
@@ -320,7 +321,7 @@ func (p *printer) createAttrPrefix(url string) string {
 	// (The "http://www.w3.org/2000/xmlns/" name space is also predefined as "xmlns",
 	// but users should not be trying to use that one directly - that's our job.)
 	if url == xmlURL {
-		return "xml"
+		return xmlNamespacePrefix
 	}
 
 	// Need to define a new name space.
@@ -332,7 +333,7 @@ func (p *printer) createAttrPrefix(url string) string {
 	// Pick a name. We try to use the final element of the path
 	// but fall back to _.
 	prefix := strings.TrimRight(url, "/")
-	if i := strings.LastIndex(prefix, "/"); i >= 0 {
+	if i := strings.LastIndexByte(prefix, '/'); i >= 0 {
 		prefix = prefix[i+1:]
 	}
 	if prefix == "" || !isName([]byte(prefix)) || strings.Contains(prefix, ":") {
@@ -1011,7 +1012,7 @@ func (s *parentStack) push(parents []string) error {
 	return nil
 }
 
-// A MarshalXMLError is returned when Marshal encounters a type
+// UnsupportedTypeError is returned when Marshal encounters a type
 // that cannot be converted into XML.
 type UnsupportedTypeError struct {
 	Type reflect.Type

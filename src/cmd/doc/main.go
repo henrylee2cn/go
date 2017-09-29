@@ -176,12 +176,12 @@ func parseArgs(args []string) (pkg *build.Package, path, symbol string, more boo
 	case 1:
 		// Done below.
 	case 2:
-		// Package must be importable.
-		pkg, err := build.Import(args[0], "", build.ImportComment)
-		if err != nil {
-			log.Fatalf("%s", err)
+		// Package must be findable and importable.
+		packagePath, ok := findPackage(args[0])
+		if !ok {
+			log.Fatalf("no such package: %s", args[0])
 		}
-		return pkg, args[0], args[1], false
+		return importDir(packagePath), args[0], args[1], true
 	}
 	// Usual case: one argument.
 	arg := args[0]
@@ -205,7 +205,7 @@ func parseArgs(args []string) (pkg *build.Package, path, symbol string, more boo
 	}
 	// If it has a slash, it must be a package path but there is a symbol.
 	// It's the last package path we care about.
-	slash := strings.LastIndex(arg, "/")
+	slash := strings.LastIndexByte(arg, '/')
 	// There may be periods in the package path before or after the slash
 	// and between a symbol and method.
 	// Split the string at various periods to see what we find.
@@ -215,7 +215,7 @@ func parseArgs(args []string) (pkg *build.Package, path, symbol string, more boo
 	// slash+1: if there's no slash, the value is -1 and start is 0; otherwise
 	// start is the byte after the slash.
 	for start := slash + 1; start < len(arg); start = period + 1 {
-		period = strings.Index(arg[start:], ".")
+		period = strings.IndexByte(arg[start:], '.')
 		symbol := ""
 		if period < 0 {
 			period = len(arg)
@@ -230,7 +230,6 @@ func parseArgs(args []string) (pkg *build.Package, path, symbol string, more boo
 		}
 		// See if we have the basename or tail of a package, as in json for encoding/json
 		// or ivy/value for robpike.io/ivy/value.
-		// Launch findPackage as a goroutine so it can return multiple paths if required.
 		path, ok := findPackage(arg[0:period])
 		if ok {
 			return importDir(path), arg[0:period], symbol, true

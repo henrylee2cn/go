@@ -346,14 +346,14 @@ func ismulticall(l Nodes) bool {
 	}
 
 	// call must return multiple values
-	return n.Left.Type.Results().NumFields() > 1
+	return n.Left.Type.NumResults() > 1
 }
 
 // Copyret emits t1, t2, ... = n, where n is a function call,
 // and then returns the list t1, t2, ....
 func copyret(n *Node, order *Order) []*Node {
 	if !n.Type.IsFuncArgStruct() {
-		Fatalf("copyret %v %d", n.Type, n.Left.Type.Results().NumFields())
+		Fatalf("copyret %v %d", n.Type, n.Left.Type.NumResults())
 	}
 
 	var l1 []*Node
@@ -533,8 +533,9 @@ func orderstmt(n *Node, order *Order) {
 		// out map read from map write when l is
 		// a map index expression.
 		t := marktemp(order)
-
 		n.Left = orderexpr(n.Left, order, nil)
+		n.Right = orderexpr(n.Right, order, nil)
+
 		n.Left = ordersafeexpr(n.Left, order)
 		tmp1 := treecopy(n.Left, src.NoXPos)
 		if tmp1.Op == OINDEXMAP {
@@ -619,7 +620,6 @@ func orderstmt(n *Node, order *Order) {
 		ODCLCONST,
 		ODCLTYPE,
 		OFALL,
-		OXFALL,
 		OGOTO,
 		OLABEL,
 		ORETJMP:
@@ -761,8 +761,9 @@ func orderstmt(n *Node, order *Order) {
 			r := n.Right
 			n.Right = ordercopyexpr(r, r.Type, order, 0)
 
-			// n->alloc is the temp for the iterator.
-			prealloc[n] = ordertemp(types.Types[TUINT8], order, true)
+			// prealloc[n] is the temp for the iterator.
+			// hiter contains pointers and needs to be zeroed.
+			prealloc[n] = ordertemp(hiter(n.Type), order, true)
 		}
 		for i := range n.List.Slice() {
 			n.List.SetIndex(i, orderexprinplace(n.List.Index(i), order))

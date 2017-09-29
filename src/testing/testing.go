@@ -224,16 +224,13 @@ import (
 	"internal/race"
 	"io"
 	"os"
-	"os/signal"
 	"runtime"
 	"runtime/debug"
 	"runtime/trace"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -255,7 +252,7 @@ var (
 	chatty               = flag.Bool("test.v", false, "verbose: print additional output")
 	count                = flag.Uint("test.count", 1, "run tests and benchmarks `n` times")
 	coverProfile         = flag.String("test.coverprofile", "", "write a coverage profile to `file`")
-	matchList            = flag.String("test.list", "", "list tests, examples, and benchmarch maching `regexp` then exit")
+	matchList            = flag.String("test.list", "", "list tests, examples, and benchmarks matching `regexp` then exit")
 	match                = flag.String("test.run", "", "run only tests and examples matching `regexp`")
 	memProfile           = flag.String("test.memprofile", "", "write a memory profile to `file`")
 	memProfileRate       = flag.Int("test.memprofilerate", 0, "set memory profiling `rate` (see runtime.MemProfileRate)")
@@ -272,10 +269,6 @@ var (
 	haveExamples bool // are there examples?
 
 	cpuList []int
-
-	inProgressMu       sync.Mutex // guards this group of fields
-	inProgressRegistry = make(map[string]int)
-	inProgressIdx      int
 )
 
 // common holds the elements common between T and B and
@@ -367,7 +360,7 @@ func (c *common) decorate(s string) string {
 	_, file, line, ok := runtime.Caller(skip)
 	if ok {
 		// Truncate file name at last file name separator.
-		if index := strings.LastIndex(file, "/"); index >= 0 {
+		if index := strings.LastIndexByte(file, '/'); index >= 0 {
 			file = file[index+1:]
 		} else if index = strings.LastIndex(file, "\\"); index >= 0 {
 			file = file[index+1:]
@@ -519,7 +512,8 @@ func (c *common) Failed() bool {
 	return failed || c.raceErrors+race.Errors() > 0
 }
 
-// FailNow marks the function as having failed and stops its execution.
+// FailNow marks the function as having failed and stops its execution
+// by calling runtime.Goexit.
 // Execution will continue at the next test or benchmark.
 // FailNow must be called from the goroutine running the
 // test or benchmark function, not from other goroutines
@@ -607,7 +601,8 @@ func (c *common) Skipf(format string, args ...interface{}) {
 	c.SkipNow()
 }
 
-// SkipNow marks the test as having been skipped and stops its execution.
+// SkipNow marks the test as having been skipped and stops its execution
+// by calling runtime.Goexit.
 // If a test fails (see Error, Errorf, Fail) and is then skipped,
 // it is still considered to have failed.
 // Execution will continue at the next test or benchmark. See also FailNow.
@@ -702,12 +697,11 @@ func tRunner(t *T, fn func(t *T)) {
 	// a call to runtime.Goexit, record the duration and send
 	// a signal saying that the test is done.
 	defer func() {
-		t.raceErrors += race.Errors()
-		if t.raceErrors > 0 {
+		if t.raceErrors+race.Errors() > 0 {
 			t.Errorf("race detected during execution of test")
 		}
 
-		t.duration += time.Now().Sub(t.start)
+		t.duration += time.Since(t.start)
 		// If the test panicked, print any test output before dying.
 		err := recover()
 		if !t.finished && err == nil {
@@ -760,7 +754,7 @@ func tRunner(t *T, fn func(t *T)) {
 // have completed.
 //
 // Run may be called simultaneously from multiple goroutines, but all such calls
-// must happen before the outer test function for t returns.
+// must return before the outer test function for t returns.
 func (t *T) Run(name string, f func(t *T)) bool {
 	atomic.StoreInt32(&t.hasSub, 1)
 	testName, ok, _ := t.context.match.fullName(&t.common, name)
@@ -785,12 +779,9 @@ func (t *T) Run(name string, f func(t *T)) bool {
 		root := t.parent
 		for ; root.parent != nil; root = root.parent {
 		}
-		inProgressMu.Lock()
 		root.mu.Lock()
-		t.registerInProgress()
 		fmt.Fprintf(root.w, "=== RUN   %s\n", t.name)
 		root.mu.Unlock()
-		inProgressMu.Unlock()
 	}
 	// Instead of reducing the running count of this test before calling the
 	// tRunner and increasing it afterwards, we rely on tRunner keeping the
@@ -885,6 +876,9 @@ type M struct {
 	tests      []InternalTest
 	benchmarks []InternalBenchmark
 	examples   []InternalExample
+
+	timer     *time.Timer
+	afterOnce sync.Once
 }
 
 // testDeps is an internal interface of functionality that is
@@ -919,6 +913,12 @@ func (m *M) Run() int {
 		flag.Parse()
 	}
 
+	if *parallel < 1 {
+		fmt.Fprintln(os.Stderr, "testing: -parallel can only be given a positive integer")
+		flag.Usage()
+		return 2
+	}
+
 	if len(*matchList) != 0 {
 		listTests(m.deps.MatchString, m.tests, m.benchmarks, m.examples)
 		return 0
@@ -927,22 +927,21 @@ func (m *M) Run() int {
 	parseCpuList()
 
 	m.before()
-	startAlarm()
+	defer m.after()
+	m.startAlarm()
 	haveExamples = len(m.examples) > 0
 	testRan, testOk := runTests(m.deps.MatchString, m.tests)
 	exampleRan, exampleOk := runExamples(m.deps.MatchString, m.examples)
-	stopAlarm()
+	m.stopAlarm()
 	if !testRan && !exampleRan && *matchBenchmarks == "" {
 		fmt.Fprintln(os.Stderr, "testing: warning: no tests to run")
 	}
 	if !testOk || !exampleOk || !runBenchmarks(m.deps.ImportPath(), m.deps.MatchString, m.benchmarks) || race.Errors() > 0 {
 		fmt.Println("FAIL")
-		m.after()
 		return 1
 	}
 
 	fmt.Println("PASS")
-	m.after()
 	return 0
 }
 
@@ -952,11 +951,6 @@ func (t *T) report() {
 	}
 	dstr := fmtDuration(t.duration)
 	format := "--- %s: %s (%s)\n"
-
-	inProgressMu.Lock()
-	defer inProgressMu.Unlock()
-	defer t.registerComplete()
-
 	if t.Failed() {
 		t.flushToParent(format, "FAIL", t.name, dstr)
 	} else if t.chatty {
@@ -966,39 +960,6 @@ func (t *T) report() {
 			t.flushToParent(format, "PASS", t.name, dstr)
 		}
 	}
-}
-
-func (t *T) registerInProgress() {
-	if !t.chatty {
-		return
-	}
-	inProgressRegistry[t.name] = inProgressIdx
-	inProgressIdx++
-}
-
-func (t *T) registerComplete() {
-	if !t.chatty {
-		return
-	}
-	delete(inProgressRegistry, t.name)
-}
-
-func reportTestsInProgress() {
-	if len(inProgressRegistry) == 0 {
-		return
-	}
-	idxToName := make(map[int]string)
-	var indexes []int
-	for name, idx := range inProgressRegistry {
-		idxToName[idx] = name
-		indexes = append(indexes, idx)
-	}
-	sort.Ints(indexes)
-	var namesInOrder []string
-	for _, idx := range indexes {
-		namesInOrder = append(namesInOrder, idxToName[idx])
-	}
-	fmt.Printf("\ntests in progress: %s\n", strings.Join(namesInOrder, ", "))
 }
 
 func listTests(matchString func(pat, str string) (bool, error), tests []InternalTest, benchmarks []InternalBenchmark, examples []InternalExample) {
@@ -1018,7 +979,7 @@ func listTests(matchString func(pat, str string) (bool, error), tests []Internal
 		}
 	}
 	for _, example := range examples {
-		if ok, _ := matchString(*matchList, example.Name); ok && example.Output != "" {
+		if ok, _ := matchString(*matchList, example.Name); ok {
 			fmt.Println(example.Name)
 		}
 	}
@@ -1038,27 +999,29 @@ func runTests(matchString func(pat, str string) (bool, error), tests []InternalT
 	ok = true
 	for _, procs := range cpuList {
 		runtime.GOMAXPROCS(procs)
-		ctx := newTestContext(*parallel, newMatcher(matchString, *match, "-test.run"))
-		t := &T{
-			common: common{
-				signal:  make(chan bool),
-				barrier: make(chan bool),
-				w:       os.Stdout,
-				chatty:  *chatty,
-			},
-			context: ctx,
-		}
-		tRunner(t, func(t *T) {
-			for _, test := range tests {
-				t.Run(test.Name, test.F)
+		for i := uint(0); i < *count; i++ {
+			ctx := newTestContext(*parallel, newMatcher(matchString, *match, "-test.run"))
+			t := &T{
+				common: common{
+					signal:  make(chan bool),
+					barrier: make(chan bool),
+					w:       os.Stdout,
+					chatty:  *chatty,
+				},
+				context: ctx,
 			}
-			// Run catching the signal rather than the tRunner as a separate
-			// goroutine to avoid adding a goroutine during the sequential
-			// phase as this pollutes the stacktrace output when aborting.
-			go func() { <-t.signal }()
-		})
-		ok = ok && !t.Failed()
-		ran = ran || t.ran
+			tRunner(t, func(t *T) {
+				for _, test := range tests {
+					t.Run(test.Name, test.F)
+				}
+				// Run catching the signal rather than the tRunner as a separate
+				// goroutine to avoid adding a goroutine during the sequential
+				// phase as this pollutes the stacktrace output when aborting.
+				go func() { <-t.signal }()
+			})
+			ok = ok && !t.Failed()
+			ran = ran || t.ran
+		}
 	}
 	return ran, ok
 }
@@ -1104,28 +1067,16 @@ func (m *M) before() {
 		fmt.Fprintf(os.Stderr, "testing: cannot use -test.coverprofile because test binary was not built with coverage enabled\n")
 		os.Exit(2)
 	}
-	if Verbose() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, os.Interrupt)
-		go func() {
-			<-sigCh
-			signal.Stop(sigCh)
-			inProgressMu.Lock()
-			reportTestsInProgress()
-			inProgressMu.Unlock()
-			proc, err := os.FindProcess(syscall.Getpid())
-			if err == nil {
-				err = proc.Signal(os.Interrupt)
-			}
-			if err != nil {
-				os.Exit(2)
-			}
-		}()
-	}
 }
 
 // after runs after all testing.
 func (m *M) after() {
+	m.afterOnce.Do(func() {
+		m.writeProfiles()
+	})
+}
+
+func (m *M) writeProfiles() {
 	if *cpuProfile != "" {
 		m.deps.StopCPUProfile() // flushes profile to disk
 	}
@@ -1202,12 +1153,11 @@ func toOutputDir(path string) string {
 	return fmt.Sprintf("%s%c%s", *outputDir, os.PathSeparator, path)
 }
 
-var timer *time.Timer
-
 // startAlarm starts an alarm if requested.
-func startAlarm() {
+func (m *M) startAlarm() {
 	if *timeout > 0 {
-		timer = time.AfterFunc(*timeout, func() {
+		m.timer = time.AfterFunc(*timeout, func() {
+			m.after()
 			debug.SetTraceback("all")
 			panic(fmt.Sprintf("test timed out after %v", *timeout))
 		})
@@ -1215,9 +1165,9 @@ func startAlarm() {
 }
 
 // stopAlarm turns off the alarm.
-func stopAlarm() {
+func (m *M) stopAlarm() {
 	if *timeout > 0 {
-		timer.Stop()
+		m.timer.Stop()
 	}
 }
 
@@ -1232,13 +1182,9 @@ func parseCpuList() {
 			fmt.Fprintf(os.Stderr, "testing: invalid value %q for -test.cpu\n", val)
 			os.Exit(1)
 		}
-		for i := uint(0); i < *count; i++ {
-			cpuList = append(cpuList, cpu)
-		}
+		cpuList = append(cpuList, cpu)
 	}
 	if cpuList == nil {
-		for i := uint(0); i < *count; i++ {
-			cpuList = append(cpuList, runtime.GOMAXPROCS(-1))
-		}
+		cpuList = append(cpuList, runtime.GOMAXPROCS(-1))
 	}
 }

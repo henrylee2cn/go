@@ -7,6 +7,7 @@ package gc
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -20,12 +21,16 @@ import (
 func parseFiles(filenames []string) uint {
 	var lines uint
 	var noders []*noder
+	// Limit the number of simultaneously open files.
+	sem := make(chan struct{}, runtime.GOMAXPROCS(0)+10)
 
 	for _, filename := range filenames {
 		p := &noder{err: make(chan syntax.Error)}
 		noders = append(noders, p)
 
 		go func(filename string) {
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			defer close(p.err)
 			base := src.NewFileBase(filename, absFilename(filename))
 
@@ -36,7 +41,7 @@ func parseFiles(filenames []string) uint {
 			}
 			defer f.Close()
 
-			p.file, _ = syntax.Parse(base, f, p.error, p.pragma, syntax.CheckBranches) // errors are tracked via p.error
+			p.file, _ = syntax.Parse(base, f, p.error, p.pragma, fileh, syntax.CheckBranches) // errors are tracked via p.error
 		}(filename)
 	}
 
@@ -65,6 +70,10 @@ func yyerrorpos(pos src.Pos, format string, args ...interface{}) {
 
 var pathPrefix string
 
+func fileh(name string) string {
+	return objabi.AbsFile("", name, pathPrefix)
+}
+
 func absFilename(name string) string {
 	return objabi.AbsFile(Ctxt.Pathname, name, pathPrefix)
 }
@@ -78,15 +87,15 @@ type noder struct {
 	scope      ScopeID
 }
 
-func (p *noder) funchdr(n *Node, pos src.Pos) ScopeID {
+func (p *noder) funchdr(n *Node) ScopeID {
 	old := p.scope
 	p.scope = 0
 	funchdr(n)
 	return old
 }
 
-func (p *noder) funcbody(n *Node, pos src.Pos, old ScopeID) {
-	funcbody(n)
+func (p *noder) funcbody(old ScopeID) {
+	funcbody()
 	p.scope = old
 }
 
@@ -382,9 +391,8 @@ func (p *noder) funcDecl(fun *syntax.FuncDecl) *Node {
 		declare(f.Func.Nname, PFUNC)
 	}
 
-	oldScope := p.funchdr(f, fun.Pos())
+	oldScope := p.funchdr(f)
 
-	endPos := fun.Pos()
 	if fun.Body != nil {
 		if f.Noescape() {
 			yyerrorl(f.Pos, "can only use //go:noescape with external func implementations")
@@ -396,16 +404,15 @@ func (p *noder) funcDecl(fun *syntax.FuncDecl) *Node {
 		}
 		f.Nbody.Set(body)
 
-		endPos = fun.Body.Rbrace
 		lineno = Ctxt.PosTable.XPos(fun.Body.Rbrace)
 		f.Func.Endlineno = lineno
 	} else {
 		if pure_go || strings.HasPrefix(f.funcname(), "init.") {
-			yyerrorl(f.Pos, "missing function body for %q", f.funcname())
+			yyerrorl(f.Pos, "missing function body")
 		}
 	}
 
-	p.funcbody(f, endPos, oldScope)
+	p.funcbody(oldScope)
 	return f
 }
 
@@ -691,7 +698,11 @@ func (p *noder) embedded(typ syntax.Expr) *Node {
 		}
 		typ = op.X
 	}
-	n := embedded(p.packname(typ), localpkg)
+
+	sym := p.packname(typ)
+	n := nod(ODCLFIELD, newname(lookup(sym.Name)), oldname(sym))
+	n.SetEmbedded(true)
+
 	if isStar {
 		n.Right = p.nod(op, OIND, n.Right, nil)
 	}
@@ -699,9 +710,13 @@ func (p *noder) embedded(typ syntax.Expr) *Node {
 }
 
 func (p *noder) stmts(stmts []syntax.Stmt) []*Node {
+	return p.stmtsFall(stmts, false)
+}
+
+func (p *noder) stmtsFall(stmts []syntax.Stmt, fallOK bool) []*Node {
 	var nodes []*Node
-	for _, stmt := range stmts {
-		s := p.stmt(stmt)
+	for i, stmt := range stmts {
+		s := p.stmtFall(stmt, fallOK && i+1 == len(stmts))
 		if s == nil {
 		} else if s.Op == OBLOCK && s.Ninit.Len() == 0 {
 			nodes = append(nodes, s.List.Slice()...)
@@ -713,12 +728,16 @@ func (p *noder) stmts(stmts []syntax.Stmt) []*Node {
 }
 
 func (p *noder) stmt(stmt syntax.Stmt) *Node {
+	return p.stmtFall(stmt, false)
+}
+
+func (p *noder) stmtFall(stmt syntax.Stmt, fallOK bool) *Node {
 	p.lineno(stmt)
 	switch stmt := stmt.(type) {
 	case *syntax.EmptyStmt:
 		return nil
 	case *syntax.LabeledStmt:
-		return p.labeledStmt(stmt)
+		return p.labeledStmt(stmt, fallOK)
 	case *syntax.BlockStmt:
 		l := p.blockStmt(stmt)
 		if len(l) == 0 {
@@ -769,7 +788,10 @@ func (p *noder) stmt(stmt syntax.Stmt) *Node {
 		case syntax.Continue:
 			op = OCONTINUE
 		case syntax.Fallthrough:
-			op = OXFALL
+			if !fallOK {
+				yyerror("fallthrough statement out of place")
+			}
+			op = OFALL
 		case syntax.Goto:
 			op = OGOTO
 		default:
@@ -778,9 +800,6 @@ func (p *noder) stmt(stmt syntax.Stmt) *Node {
 		n := p.nod(stmt, op, nil, nil)
 		if stmt.Label != nil {
 			n.Left = p.newname(stmt.Label)
-		}
-		if op == OXFALL {
-			n.Xoffset = int64(types.Block)
 		}
 		return n
 	case *syntax.CallStmt:
@@ -901,7 +920,7 @@ func (p *noder) switchStmt(stmt *syntax.SwitchStmt) *Node {
 	}
 
 	tswitch := n.Left
-	if tswitch != nil && (tswitch.Op != OTYPESW || tswitch.Left == nil) {
+	if tswitch != nil && tswitch.Op != OTYPESW {
 		tswitch = nil
 	}
 	n.List.Set(p.caseClauses(stmt.Body, tswitch, stmt.Rbrace))
@@ -923,15 +942,35 @@ func (p *noder) caseClauses(clauses []*syntax.CaseClause, tswitch *Node, rbrace 
 		if clause.Cases != nil {
 			n.List.Set(p.exprList(clause.Cases))
 		}
-		if tswitch != nil {
+		if tswitch != nil && tswitch.Left != nil {
 			nn := newname(tswitch.Left.Sym)
 			declare(nn, dclcontext)
 			n.Rlist.Set1(nn)
 			// keep track of the instances for reporting unused
 			nn.Name.Defn = tswitch
 		}
-		n.Xoffset = int64(types.Block)
-		n.Nbody.Set(p.stmts(clause.Body))
+
+		// Trim trailing empty statements. We omit them from
+		// the Node AST anyway, and it's easier to identify
+		// out-of-place fallthrough statements without them.
+		body := clause.Body
+		for len(body) > 0 {
+			if _, ok := body[len(body)-1].(*syntax.EmptyStmt); !ok {
+				break
+			}
+			body = body[:len(body)-1]
+		}
+
+		n.Nbody.Set(p.stmtsFall(body, true))
+		if l := n.Nbody.Len(); l > 0 && n.Nbody.Index(l-1).Op == OFALL {
+			if tswitch != nil {
+				yyerror("cannot fallthrough in type switch")
+			}
+			if i+1 == len(clauses) {
+				yyerror("cannot fallthrough final case in switch")
+			}
+		}
+
 		nodes = append(nodes, n)
 	}
 	if len(clauses) > 0 {
@@ -969,12 +1008,12 @@ func (p *noder) commClauses(clauses []*syntax.CommClause, rbrace src.Pos) []*Nod
 	return nodes
 }
 
-func (p *noder) labeledStmt(label *syntax.LabeledStmt) *Node {
+func (p *noder) labeledStmt(label *syntax.LabeledStmt, fallOK bool) *Node {
 	lhs := p.nod(label, OLABEL, p.newname(label.Label), nil)
 
 	var ls *Node
 	if label.Stmt != nil { // TODO(mdempsky): Should always be present.
-		ls = p.stmt(label.Stmt)
+		ls = p.stmtFall(label.Stmt, fallOK)
 	}
 
 	lhs.Name.Defn = ls
@@ -1185,7 +1224,7 @@ func (p *noder) pragma(pos src.Pos, text string) syntax.Pragma {
 		fallthrough // because of //go:cgo_unsafe_args
 	default:
 		verb := text
-		if i := strings.Index(text, " "); i >= 0 {
+		if i := strings.IndexByte(text, ' '); i >= 0 {
 			verb = verb[:i]
 		}
 		prag := pragmaValue(verb)

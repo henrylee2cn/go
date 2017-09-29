@@ -419,7 +419,7 @@ func stringVal(tv types.TypeAndValue) (string, bool) {
 // formatIter iterates through the string s in increasing
 // index order and calls f for each format specifier '%..v'.
 // The arguments for f describe the specifier's index range.
-// If a format specifier contains a  "*", f is called with
+// If a format specifier contains a "*", f is called with
 // the index range for "*" alone, before being called for
 // the entire specifier. The result of f is the index of
 // the rune at which iteration continues.
@@ -540,7 +540,7 @@ func init() {
 	for key, val := range knownFormats {
 		// key must be "typename format", and format starts with a '%'
 		// (formats containing '*' alone are not collected in this table)
-		i := strings.Index(key, "%")
+		i := strings.IndexByte(key, '%')
 		if i < 0 || !oneFormat(key[i:]) {
 			log.Fatalf("incorrect knownFormats key: %q", key)
 		}
@@ -571,9 +571,14 @@ var knownFormats = map[string]string{
 	"*cmd/compile/internal/ssa.Block %s":              "",
 	"*cmd/compile/internal/ssa.Block %v":              "",
 	"*cmd/compile/internal/ssa.Func %s":               "",
+	"*cmd/compile/internal/ssa.Func %v":               "",
+	"*cmd/compile/internal/ssa.LocalSlot %+v":         "",
+	"*cmd/compile/internal/ssa.LocalSlot %v":          "",
+	"*cmd/compile/internal/ssa.Register %s":           "",
 	"*cmd/compile/internal/ssa.SparseTreeNode %v":     "",
 	"*cmd/compile/internal/ssa.Value %s":              "",
 	"*cmd/compile/internal/ssa.Value %v":              "",
+	"*cmd/compile/internal/ssa.VarLoc %v":             "",
 	"*cmd/compile/internal/ssa.sparseTreeMapEntry %v": "",
 	"*cmd/compile/internal/types.Field %p":            "",
 	"*cmd/compile/internal/types.Field %v":            "",
@@ -592,6 +597,7 @@ var knownFormats = map[string]string{
 	"*cmd/compile/internal/types.Type %p":             "",
 	"*cmd/compile/internal/types.Type %s":             "",
 	"*cmd/compile/internal/types.Type %v":             "",
+	"*cmd/internal/dwarf.Location %#v":                "",
 	"*cmd/internal/obj.Addr %v":                       "",
 	"*cmd/internal/obj.LSym %v":                       "",
 	"*cmd/internal/obj.Prog %s":                       "",
@@ -600,17 +606,22 @@ var knownFormats = map[string]string{
 	"[16]byte %x":                                     "",
 	"[]*cmd/compile/internal/gc.Node %v":              "",
 	"[]*cmd/compile/internal/gc.Sig %#v":              "",
+	"[]*cmd/compile/internal/ssa.Block %+v":           "",
 	"[]*cmd/compile/internal/ssa.Value %v":            "",
+	"[][]cmd/compile/internal/ssa.SlotID %v":          "",
 	"[]byte %s":                                       "",
 	"[]byte %x":                                       "",
 	"[]cmd/compile/internal/ssa.Edge %v":              "",
 	"[]cmd/compile/internal/ssa.ID %v":                "",
+	"[]cmd/compile/internal/ssa.VarLocList %v":        "",
 	"[]string %v":                                     "",
 	"bool %v":                                         "",
 	"byte %08b":                                       "",
 	"byte %c":                                         "",
 	"cmd/compile/internal/arm.shift %d":               "",
 	"cmd/compile/internal/gc.Class %d":                "",
+	"cmd/compile/internal/gc.Class %s":                "",
+	"cmd/compile/internal/gc.Class %v":                "",
 	"cmd/compile/internal/gc.Ctype %d":                "",
 	"cmd/compile/internal/gc.Ctype %v":                "",
 	"cmd/compile/internal/gc.Level %d":                "",
@@ -626,15 +637,18 @@ var knownFormats = map[string]string{
 	"cmd/compile/internal/gc.Val %v":                  "",
 	"cmd/compile/internal/gc.fmtMode %d":              "",
 	"cmd/compile/internal/gc.initKind %d":             "",
+	"cmd/compile/internal/gc.locID %v":                "",
 	"cmd/compile/internal/ssa.BranchPrediction %d":    "",
 	"cmd/compile/internal/ssa.Edge %v":                "",
 	"cmd/compile/internal/ssa.GCNode %v":              "",
 	"cmd/compile/internal/ssa.ID %d":                  "",
-	"cmd/compile/internal/ssa.LocalSlot %v":           "",
-	"cmd/compile/internal/ssa.Location %v":            "",
+	"cmd/compile/internal/ssa.ID %v":                  "",
+	"cmd/compile/internal/ssa.LocalSlot %s":           "",
+	"cmd/compile/internal/ssa.Location %s":            "",
 	"cmd/compile/internal/ssa.Op %s":                  "",
 	"cmd/compile/internal/ssa.Op %v":                  "",
 	"cmd/compile/internal/ssa.ValAndOff %s":           "",
+	"cmd/compile/internal/ssa.VarLocList %v":          "",
 	"cmd/compile/internal/ssa.rbrank %d":              "",
 	"cmd/compile/internal/ssa.regMask %d":             "",
 	"cmd/compile/internal/ssa.register %d":            "",
@@ -648,6 +662,7 @@ var knownFormats = map[string]string{
 	"cmd/compile/internal/types.EType %d":             "",
 	"cmd/compile/internal/types.EType %s":             "",
 	"cmd/compile/internal/types.EType %v":             "",
+	"cmd/internal/dwarf.Location %#v":                 "",
 	"cmd/internal/src.Pos %s":                         "",
 	"cmd/internal/src.Pos %v":                         "",
 	"error %v":                                        "",

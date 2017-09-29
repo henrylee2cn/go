@@ -93,6 +93,7 @@ var vcsList = []*vcsCmd{
 	vcsGit,
 	vcsSvn,
 	vcsBzr,
+	vcsFossil,
 }
 
 // vcsByCmd returns the version control system for the given
@@ -302,21 +303,54 @@ func svnRemoteRepo(vcsSvn *vcsCmd, rootDir string) (remoteRepo string, err error
 	out := string(outb)
 
 	// Expect:
-	// ...
-	// Repository Root: <URL>
-	// ...
-
-	i := strings.Index(out, "\nRepository Root: ")
+	//
+	//	 ...
+	// 	URL: <URL>
+	// 	...
+	//
+	// Note that we're not using the Repository Root line,
+	// because svn allows checking out subtrees.
+	// The URL will be the URL of the subtree (what we used with 'svn co')
+	// while the Repository Root may be a much higher parent.
+	i := strings.Index(out, "\nURL: ")
 	if i < 0 {
 		return "", fmt.Errorf("unable to parse output of svn info")
 	}
-	out = out[i+len("\nRepository Root: "):]
+	out = out[i+len("\nURL: "):]
 	i = strings.Index(out, "\n")
 	if i < 0 {
 		return "", fmt.Errorf("unable to parse output of svn info")
 	}
 	out = out[:i]
 	return strings.TrimSpace(out), nil
+}
+
+// fossilRepoName is the name go get associates with a fossil repository. In the
+// real world the file can be named anything.
+const fossilRepoName = ".fossil"
+
+// vcsFossil describes how to use Fossil (fossil-scm.org)
+var vcsFossil = &vcsCmd{
+	name: "Fossil",
+	cmd:  "fossil",
+
+	createCmd:   []string{"-go-internal-mkdir {dir} clone {repo} " + filepath.Join("{dir}", fossilRepoName), "-go-internal-cd {dir} open .fossil"},
+	downloadCmd: []string{"up"},
+
+	tagCmd:         []tagCmd{{"tag ls", `(.*)`}},
+	tagSyncCmd:     []string{"up tag:{tag}"},
+	tagSyncDefault: []string{"up trunk"},
+
+	scheme:     []string{"https", "http"},
+	remoteRepo: fossilRemoteRepo,
+}
+
+func fossilRemoteRepo(vcsFossil *vcsCmd, rootDir string) (remoteRepo string, err error) {
+	out, err := vcsFossil.runOutput(rootDir, "remote-url")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (v *vcsCmd) String() string {
@@ -355,6 +389,19 @@ func (v *vcsCmd) run1(dir string, cmdline string, keyval []string, verbose bool)
 	args := strings.Fields(cmdline)
 	for i, arg := range args {
 		args[i] = expand(m, arg)
+	}
+
+	if len(args) >= 2 && args[0] == "-go-internal-mkdir" {
+		var err error
+		if filepath.IsAbs(args[1]) {
+			err = os.Mkdir(args[1], os.ModePerm)
+		} else {
+			err = os.Mkdir(filepath.Join(dir, args[1]), os.ModePerm)
+		}
+		if err != nil {
+			return nil, err
+		}
+		args = args[2:]
 	}
 
 	if len(args) >= 2 && args[0] == "-go-internal-cd" {
@@ -652,7 +699,7 @@ func repoRootFromVCSPaths(importPath, scheme string, security web.SecurityMode, 
 //
 // This handles custom import paths like "name.tld/pkg/foo" or just "name.tld".
 func repoRootForImportDynamic(importPath string, security web.SecurityMode) (*repoRoot, error) {
-	slash := strings.Index(importPath, "/")
+	slash := strings.IndexByte(importPath, '/')
 	if slash < 0 {
 		slash = len(importPath)
 	}
@@ -890,10 +937,18 @@ var vcsPaths = []*vcsPath{
 		repo:   "https://{root}",
 	},
 
+	// chiselapp.com for fossil
+	{
+		prefix: "chiselapp.com",
+		re:     `^(?P<root>chiselapp\.com/user/[A-Za-z0-9]+/repository/[A-Za-z0-9_.\-]+)$`,
+		vcs:    "fossil",
+		repo:   "https://{root}",
+	},
+
 	// General syntax for any server.
 	// Must be last.
 	{
-		re:   `^(?P<root>(?P<repo>([a-z0-9.\-]+\.)+[a-z0-9.\-]+(:[0-9]+)?(/~?[A-Za-z0-9_.\-]+)+?)\.(?P<vcs>bzr|git|hg|svn))(/~?[A-Za-z0-9_.\-]+)*$`,
+		re:   `^(?P<root>(?P<repo>([a-z0-9.\-]+\.)+[a-z0-9.\-]+(:[0-9]+)?(/~?[A-Za-z0-9_.\-]+)+?)\.(?P<vcs>bzr|fossil|git|hg|svn))(/~?[A-Za-z0-9_.\-]+)*$`,
 		ping: true,
 	},
 }
